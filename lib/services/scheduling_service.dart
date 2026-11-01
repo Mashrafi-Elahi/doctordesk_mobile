@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import 'chamber_resolver.dart';
 import 'notification_service.dart';
+import 'queue_service.dart';
 
 class ParsedSchedule {
   final TimeOfDay start;
@@ -43,15 +44,6 @@ class FreeSlotsResult {
 }
 
 class SchedulingService {
-  /// Last queue number handed out for a chamber-day. Walk-ins used to write
-  /// `lastNumber` and Accept `lastQueuePosition`; reading the higher of the two
-  /// (and writing both) keeps one sequence with no duplicate numbers.
-  static int lastQueueNumber(Map<String, dynamic>? data) {
-    final a = (data?['lastQueuePosition'] as num?)?.toInt() ?? 0;
-    final b = (data?['lastNumber'] as num?)?.toInt() ?? 0;
-    return a > b ? a : b;
-  }
-
   static final FirebaseFirestore _db = FirebaseFirestore.instance;
 
   static String dateKey(DateTime dt) {
@@ -457,13 +449,15 @@ class SchedulingService {
       resolvedPatientName = (appt['patientName'] ?? 'Patient').toString();
       resolvedDoctorName = (appt['doctorName'] ?? 'Doctor').toString();
 
+      if (!QueueService.canTransition(appt['status'], ApptStatus.confirmed)) {
+        throw StateError('This appointment can no longer be confirmed.');
+      }
+
       final targetSlotDocId = slotId(doctorId, slot);
       final slotRef = _db.collection('doctor_slots').doc(targetSlotDocId);
-      final counterRef = _db.collection('queues').doc('${chamberId}_$targetDateKey');
       final overrideRef = _db.collection('chamber_day_overrides').doc('${chamberId}_$targetDateKey');
 
       final slotSnap = await tx.get(slotRef);
-      final counter = await tx.get(counterRef);
       final override = await tx.get(overrideRef);
 
       // Resolve the doctor's auth UID now: transactions must do every read
@@ -487,8 +481,13 @@ class SchedulingService {
         throw StateError('That slot is already taken by another appointment.');
       }
 
-      final lastPos = counter.exists ? lastQueueNumber(counter.data()) : 0;
-      assignedQueue = (appt['queuePosition'] as num?)?.toInt() ?? (lastPos + 1);
+      // Last read-then-write step: every other read is done above.
+      assignedQueue = await QueueService.assignToken(
+        tx,
+        appt: appt,
+        appointmentId: appointmentId,
+        slot: slot,
+      );
 
       final oldSlot = appt['slotId']?.toString();
       if (oldSlot != null && oldSlot.isNotEmpty && oldSlot != targetSlotDocId) {
@@ -508,18 +507,12 @@ class SchedulingService {
         'status': 'confirmed',
         'scheduledTime': Timestamp.fromDate(slot),
         'queuePosition': assignedQueue,
+        'queueId': QueueService.queueId(chamberId, doctorId, slot),
         'slotId': targetSlotDocId,
+        'confirmedAt': FieldValue.serverTimestamp(),
         'updatedBy': actorUid,
         'updatedAt': FieldValue.serverTimestamp(),
       });
-
-      tx.set(counterRef, {
-        'chamberId': chamberId,
-        'date': targetDateKey,
-        'lastQueuePosition': appt['queuePosition'] == null ? assignedQueue : lastPos,
-        'lastNumber': appt['queuePosition'] == null ? assignedQueue : lastPos,
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
 
       // Check if actor is operator
       final isActorOperator = actorUid.isNotEmpty && actorUid != doctorAuthUid;
@@ -683,6 +676,17 @@ class SchedulingService {
         throw StateError('That slot is already taken by another appointment.');
       }
 
+      if (!QueueService.canTransition(appt['status'], ApptStatus.confirmed)) {
+        throw StateError('Only requested or confirmed appointments can be rescheduled.');
+      }
+      // Keeps the token for a same-day move; a new day means a new token.
+      final token = await QueueService.assignToken(
+        tx,
+        appt: appt,
+        appointmentId: appointmentId,
+        slot: newSlot,
+      );
+
       final oldSlot = appt['slotId']?.toString();
       if (oldSlot != null && oldSlot.isNotEmpty && oldSlot != targetSlotDocId) {
         tx.delete(_db.collection('doctor_slots').doc(oldSlot));
@@ -700,6 +704,8 @@ class SchedulingService {
       tx.update(apptRef, {
         'status': 'confirmed',
         'scheduledTime': Timestamp.fromDate(newSlot),
+        'queuePosition': token,
+        'queueId': QueueService.queueId(chamberId, doctorId, newSlot),
         'slotId': targetSlotDocId,
         'updatedBy': actorUid,
         'updatedAt': FieldValue.serverTimestamp(),
@@ -894,7 +900,7 @@ class SchedulingService {
 
     final slotDocId = slotId(doctorId, scheduledSlot);
     final slotLockRef = _db.collection('doctor_slots').doc(slotDocId);
-    final queueRef = _db.collection('queues').doc('${chamberId}_$dKey');
+    final queueRef = _db.collection('queues').doc(QueueService.queueId(chamberId, doctorId, date));
     final apptRef = _db.collection('appointments').doc();
 
     int assignedQueuePos = 1;
@@ -908,16 +914,19 @@ class SchedulingService {
       }
 
       final queueSnap = await tx.get(queueRef);
-      final currentQueue = lastQueueNumber(queueSnap.data());
-      assignedQueuePos = currentQueue + 1;
+      assignedQueuePos = QueueService.nextToken(queueSnap.data());
 
       tx.set(
         queueRef,
         {
-          'chamberId': chamberId,
-          'date': dKey,
-          'lastNumber': assignedQueuePos,
-          'lastQueuePosition': assignedQueuePos,
+          ...QueueService.joinWrite(
+            queueSnap.data(),
+            chamberId: chamberId,
+            doctorId: doctorId,
+            date: dKey,
+            token: assignedQueuePos,
+            appointmentId: apptRef.id,
+          ),
           'updatedAt': FieldValue.serverTimestamp(),
         },
         SetOptions(merge: true),
@@ -932,10 +941,13 @@ class SchedulingService {
         'chamberName': resolvedChamberName,
         'doctorId': doctorId,
         'doctorName': resolvedDoctorName,
-        'status': 'confirmed',
+        // A walk-in is standing at the desk, so they are already checked in.
+        'status': isWalkIn ? ApptStatus.checkedIn : ApptStatus.confirmed,
+        if (isWalkIn) 'checkedInAt': FieldValue.serverTimestamp(),
         'source': isWalkIn ? 'walk_in' : 'offline',
         'operatorNote': operatorNote?.trim() ?? '',
         'queuePosition': assignedQueuePos,
+        'queueId': queueRef.id,
         'scheduledTime': Timestamp.fromDate(scheduledSlot),
         'slotMinutes': chamberRec?.slotMinutes ?? 10,
         'createdBy': actorUid,

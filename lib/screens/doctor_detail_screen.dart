@@ -272,6 +272,10 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
 
     String selectedChamberId = chamberOptions.first.id;
     DateTime selectedDate = DateTime.now().add(const Duration(days: 1));
+    // Optional preferred slot; the desk sees it when proposing a time.
+    DateTime? preferredSlot;
+    Future<FreeSlotsResult>? slotsFuture;
+    String slotsKey = '';
     // Preferred date only; time and queue number are assigned upon acceptance.
     final patientNameCtrl = TextEditingController(
       text: AuthService.currentUser?.displayName?.isNotEmpty == true
@@ -376,11 +380,21 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                             ),
                             const SizedBox(height: 6),
                             FutureBuilder<FreeSlotsResult>(
-                              future: SchedulingService.getFreeSlots(
-                                chamberId: selectedChamberId,
-                                doctorId: doctor.id,
-                                date: selectedDate,
-                              ),
+                              // Fetched once per chamber+date, not on every
+                              // chip tap.
+                              future: () {
+                                final key = '$selectedChamberId|${selectedDate.year}-${selectedDate.month}-${selectedDate.day}';
+                                if (key != slotsKey || slotsFuture == null) {
+                                  slotsKey = key;
+                                  preferredSlot = null;
+                                  slotsFuture = SchedulingService.getFreeSlots(
+                                    chamberId: selectedChamberId,
+                                    doctorId: doctor.id,
+                                    date: selectedDate,
+                                  );
+                                }
+                                return slotsFuture;
+                              }(),
                               builder: (context, snap) {
                                 if (snap.connectionState == ConnectionState.waiting) {
                                   return const Padding(
@@ -421,16 +435,55 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                                   );
                                 }
                                 if (res.totalCapacity > 0) {
-                                  return Padding(
-                                    padding: const EdgeInsets.symmetric(vertical: 4),
-                                    child: Text(
-                                      '${res.slotsLeft} slots left for ${selectedDate.day}/${selectedDate.month}',
-                                      style: TextStyle(
-                                        color: Colors.green.shade800,
-                                        fontWeight: FontWeight.w600,
-                                        fontSize: 12.5,
+                                  String fmt(DateTime t) {
+                                    final h = t.hour > 12 ? t.hour - 12 : (t.hour == 0 ? 12 : t.hour);
+                                    return '$h:${t.minute.toString().padLeft(2, '0')} ${t.hour >= 12 ? 'PM' : 'AM'}';
+                                  }
+                                  return Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Padding(
+                                        padding: const EdgeInsets.symmetric(vertical: 4),
+                                        child: Text(
+                                          '${res.slotsLeft} slots left for ${selectedDate.day}/${selectedDate.month}',
+                                          style: TextStyle(
+                                            color: Colors.green.shade800,
+                                            fontWeight: FontWeight.w600,
+                                            fontSize: 12.5,
+                                          ),
+                                        ),
                                       ),
-                                    ),
+                                      if (res.slots.isNotEmpty) ...[
+                                        const SizedBox(height: 4),
+                                        const Text('Preferred time (optional)',
+                                            style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
+                                        const SizedBox(height: 6),
+                                        SizedBox(
+                                          height: 40,
+                                          child: ListView(
+                                            scrollDirection: Axis.horizontal,
+                                            children: [
+                                              Padding(
+                                                padding: const EdgeInsets.only(right: 6),
+                                                child: ChoiceChip(
+                                                  label: const Text('Any time'),
+                                                  selected: preferredSlot == null,
+                                                  onSelected: (_) => setSheetState(() => preferredSlot = null),
+                                                ),
+                                              ),
+                                              ...res.slots.map((slot) => Padding(
+                                                    padding: const EdgeInsets.only(right: 6),
+                                                    child: ChoiceChip(
+                                                      label: Text(fmt(slot)),
+                                                      selected: preferredSlot == slot,
+                                                      onSelected: (_) => setSheetState(() => preferredSlot = slot),
+                                                    ),
+                                                  )),
+                                            ],
+                                          ),
+                                        ),
+                                      ],
+                                    ],
                                   );
                                 }
                                 return const SizedBox.shrink();
@@ -474,13 +527,14 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                                   doctorId: doctor.id,
                                   doctorName: doctor.name,
                                   status: 'requested',
+                                  preferredTime: preferredSlot,
                                 );
                                 if (ctx.mounted) Navigator.pop(ctx);
                                 if (mounted) {
                                   messenger.showSnackBar(
                                     const SnackBar(
                                       content: Text(
-                                          'Request sent. You will be notified once it is confirmed with a date and time.'),
+                                          'Request sent. The chamber will propose a time for you to accept.'),
                                       behavior: SnackBarBehavior.floating,
                                     ),
                                   );

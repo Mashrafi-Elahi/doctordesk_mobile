@@ -9,10 +9,11 @@ void main() {
       expect(AppBottomNavConfig.thirdTabLabel(AppRole.operator), 'Desk');
     });
 
-    test('hides third tab when chamberCount == 0 for doctor/operator', () {
+    // A doctor with no chamber yet needs the Manage tab to add their first one.
+    test('shows third tab even when chamberCount == 0 for doctor/operator', () {
       const zeroChambers = UserRoles(isDoctor: true, isOperator: true, chamberCount: 0);
-      expect(AppBottomNavConfig.showThirdTab(AppRole.doctor, zeroChambers), isFalse);
-      expect(AppBottomNavConfig.showThirdTab(AppRole.operator, zeroChambers), isFalse);
+      expect(AppBottomNavConfig.showThirdTab(AppRole.doctor, zeroChambers), isTrue);
+      expect(AppBottomNavConfig.showThirdTab(AppRole.operator, zeroChambers), isTrue);
       // Patient tab always shows regardless of chambers
       expect(AppBottomNavConfig.showThirdTab(AppRole.patient, zeroChambers), isTrue);
 

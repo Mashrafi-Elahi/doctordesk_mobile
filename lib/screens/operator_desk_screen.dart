@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
@@ -7,6 +9,7 @@ import '../services/auth_service.dart';
 import '../services/chamber_resolver.dart';
 import '../services/data_service.dart';
 import '../services/firestore_service.dart';
+import '../services/queue_service.dart';
 import '../services/scheduling_service.dart';
 import '../widgets/state_views.dart';
 import '../widgets/profile_avatar_button.dart';
@@ -1216,16 +1219,22 @@ class _AppointmentListState extends State<_AppointmentList> {
           });
         }
 
+        // Queue view leads with the "now serving / call next" bar.
+        final lead = view == _DeskView.queue ? 1 : 0;
         return ListView.separated(
           padding: const EdgeInsets.all(16),
-          itemCount: docs.length,
+          itemCount: docs.length + lead,
           separatorBuilder: (_, __) => const SizedBox(height: 8),
-          itemBuilder: (context, index) => _AppointmentRow(
-            reference: docs[index].reference,
-            data: docs[index].data(),
-            view: view,
-            chamberId: chamberId,
-          ),
+          itemBuilder: (context, index) {
+            if (index < lead) return _NowServingBar(docs: docs);
+            final doc = docs[index - lead];
+            return _AppointmentRow(
+              reference: doc.reference,
+              data: doc.data(),
+              view: view,
+              chamberId: chamberId,
+            );
+          },
         );
       },
     );
@@ -1281,10 +1290,14 @@ class _AppointmentRow extends StatelessWidget {
     return '${time.day}/${time.month}/${time.year}';
   }
 
-  Future<void> _accept(BuildContext context) async {
-    // Captured up front: the row leaves the list as soon as its status
-    // changes, so its context is gone by the time the write finishes.
-    final messenger = ScaffoldMessenger.of(context);
+  DateTime? get _preferredTime {
+    final value = data['preferredTime'];
+    return value is Timestamp ? value.toDate() : null;
+  }
+
+  /// Loads free slots for the request's date and lets the desk pick one.
+  Future<DateTime?> _pickSlot(BuildContext context,
+      {required String title, required String confirmLabel}) async {
     final doctorId = (data['doctorId'] ?? '').toString();
     final date = _scheduledTime ?? DateTime.now();
 
@@ -1304,38 +1317,50 @@ class _AppointmentRow extends StatelessWidget {
     } catch (_) {}
 
     if (context.mounted) Navigator.pop(context);
-    if (!context.mounted) return;
+    if (!context.mounted) return null;
 
-    if (freeResult == null || freeResult.slots.isEmpty) {
+    // The slot already held for this appointment stays available to it.
+    final proposed = data['proposedTime'];
+    final slots = <DateTime>[
+      ...?freeResult?.slots,
+      if (proposed is Timestamp &&
+          !(freeResult?.slots.contains(proposed.toDate()) ?? false))
+        proposed.toDate(),
+    ]..sort();
+
+    if (slots.isEmpty) {
       final reason = (freeResult?.totalCapacity ?? 0) == 0
           ? 'Visiting hours not set for this chamber'
           : (freeResult?.emptyReason ?? 'No slots available');
       final next = freeResult?.nextVisitingDates ?? const [];
-      String nextText = '';
-      if (next.isNotEmpty) {
-        nextText = '\nNext visiting dates: ${next.map((d) => "${d.day}/${d.month}").join(', ')}';
-      }
-      showDialog(
+      final nextText = next.isEmpty
+          ? ''
+          : '\nNext visiting dates: ${next.map((d) => "${d.day}/${d.month}").join(', ')}';
+      await showDialog(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: Text('Cannot Accept for ${_dateOnlyLabel()}'),
+          title: Text('No free slot on ${_dateOnlyLabel()}'),
           content: Text('$reason.$nextText'),
           actions: [
             TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
           ],
         ),
       );
-      return;
+      return null;
     }
 
-    final freeSlots = freeResult.slots;
-    DateTime selectedSlot = freeSlots.first;
+    final preferred = _preferredTime;
+    DateTime selectedSlot = slots.firstWhere(
+      (s) => preferred != null && s == preferred,
+      orElse: () => slots.first,
+    );
+    if (!context.mounted) return null;
 
-    final selected = await showDialog<DateTime>(
+    return showDialog<DateTime>(
       context: context,
       builder: (dlgCtx) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
-          title: Text('Accept Request (${date.day}/${date.month}/${date.year})'),
+          title: Text('$title (${date.day}/${date.month}/${date.year})'),
           content: SizedBox(
             width: double.maxFinite,
             child: SingleChildScrollView(
@@ -1343,17 +1368,20 @@ class _AppointmentRow extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  if (preferred != null) ...[
+                    Text('Patient prefers ${_format12Hour(preferred)}',
+                        style: const TextStyle(fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 8),
+                  ],
                   const Text('Select an available free time slot:'),
                   const SizedBox(height: 12),
                   Wrap(
                     spacing: 8,
                     runSpacing: 8,
-                    children: freeSlots.map((slot) {
-                      final isSelected = slot == selectedSlot;
-                      final timeStr = _format12Hour(slot);
+                    children: slots.map((slot) {
                       return ChoiceChip(
-                        label: Text(timeStr),
-                        selected: isSelected,
+                        label: Text(_format12Hour(slot)),
+                        selected: slot == selectedSlot,
                         onSelected: (val) {
                           if (val) setDialogState(() => selectedSlot = slot);
                         },
@@ -1368,132 +1396,56 @@ class _AppointmentRow extends StatelessWidget {
             TextButton(onPressed: () => Navigator.pop(dlgCtx), child: const Text('Cancel')),
             FilledButton(
               onPressed: () => Navigator.pop(dlgCtx, selectedSlot),
-              child: const Text('Confirm & Assign Queue'),
+              child: Text(confirmLabel),
             ),
           ],
         ),
       ),
     );
+  }
 
-    if (selected == null || !context.mounted) return;
-
+  /// Confirms straight away (e.g. agreed over the phone) and issues a token.
+  Future<void> _accept(BuildContext context) async {
+    // Captured up front: the row leaves the list as soon as its status
+    // changes, so its context is gone by the time the write finishes.
+    final messenger = ScaffoldMessenger.of(context);
+    final selected = await _pickSlot(context,
+        title: 'Confirm now', confirmLabel: 'Confirm & give token');
+    if (selected == null) return;
     try {
       await DataService.confirmAppointment(
         appointmentId: reference.id,
         confirmedTime: selected,
       );
-      {
-        messenger.showSnackBar(
-          const SnackBar(content: Text('Appointment accepted and confirmed.')),
-        );
-      }
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Appointment confirmed and token issued.')),
+      );
     } catch (error) {
-      {
-        messenger.showSnackBar(
-          SnackBar(content: Text('Could not accept. ${friendlyErrorMessage(error)}')),
-        );
-      }
+      messenger.showSnackBar(
+        SnackBar(content: Text('Could not confirm. ${friendlyErrorMessage(error)}')),
+      );
     }
   }
 
-  Future<void> _reschedule(BuildContext context) async {
-    // Captured up front: the row leaves the list as soon as its status
-    // changes, so its context is gone by the time the write finishes.
+  /// Offers a time; the patient accepts (and gets a token) or declines.
+  Future<void> _propose(BuildContext context) async {
     final messenger = ScaffoldMessenger.of(context);
     final doctorId = (data['doctorId'] ?? '').toString();
-    final initial = _scheduledTime ?? DateTime.now();
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => const Center(child: CircularProgressIndicator()),
-    );
-
-    FreeSlotsResult? freeResult;
+    final selected = await _pickSlot(context,
+        title: 'Propose a time', confirmLabel: 'Send to patient');
+    if (selected == null) return;
     try {
-      freeResult = await SchedulingService.getFreeSlots(
-        chamberId: chamberId,
-        doctorId: doctorId,
-        date: initial,
-      );
-    } catch (_) {}
-
-    if (context.mounted) Navigator.pop(context);
-    if (!context.mounted) return;
-
-    if (freeResult == null || freeResult.slots.isEmpty) {
-      final reason = freeResult?.emptyReason ?? 'No free slots';
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Cannot reschedule: $reason for ${initial.day}/${initial.month}.')),
-      );
-      return;
-    }
-
-    final freeSlots = freeResult.slots;
-    DateTime selectedSlot = freeSlots.first;
-
-    final selected = await showDialog<DateTime>(
-      context: context,
-      builder: (dlgCtx) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: Text('Reschedule Slot (${initial.day}/${initial.month}/${initial.year})'),
-          content: SizedBox(
-            width: double.maxFinite,
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('Select an available free time slot:'),
-                  const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: freeSlots.map((slot) {
-                      final isSelected = slot == selectedSlot;
-                      final timeStr = _format12Hour(slot);
-                      return ChoiceChip(
-                        label: Text(timeStr),
-                        selected: isSelected,
-                        onSelected: (val) {
-                          if (val) setDialogState(() => selectedSlot = slot);
-                        },
-                      );
-                    }).toList(),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(dlgCtx), child: const Text('Cancel')),
-            FilledButton(
-              onPressed: () => Navigator.pop(dlgCtx, selectedSlot),
-              child: const Text('Reschedule'),
-            ),
-          ],
-        ),
-      ),
-    );
-
-    if (selected == null || !context.mounted) return;
-
-    try {
-      await DataService.rescheduleAppointment(
+      await QueueService.proposeTime(
         appointmentId: reference.id,
-        newTime: selected,
+        slot: selected,
+        slotDocId: SchedulingService.slotId(doctorId, selected),
       );
-      {
-        messenger.showSnackBar(
-          const SnackBar(content: Text('Appointment rescheduled.')),
-        );
-      }
+      messenger.showSnackBar(SnackBar(
+          content: Text('Proposed ${_format12Hour(selected)}. Waiting for $_patientName to accept.')));
     } catch (error) {
-      {
-        messenger.showSnackBar(
-          SnackBar(content: Text('Could not reschedule. ${friendlyErrorMessage(error)}')),
-        );
-      }
+      messenger.showSnackBar(
+        SnackBar(content: Text('Could not propose. ${friendlyErrorMessage(error)}')),
+      );
     }
   }
 
@@ -1551,6 +1503,39 @@ class _AppointmentRow extends StatelessWidget {
     }
   }
 
+  Future<void> _checkIn(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await QueueService.checkIn(reference.id);
+      messenger.showSnackBar(SnackBar(content: Text('$_patientName checked in.')));
+    } catch (error) {
+      messenger.showSnackBar(SnackBar(content: Text('Could not check in. ${friendlyErrorMessage(error)}')));
+    }
+  }
+
+  Future<void> _noShow(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('Mark as no-show?'),
+        content: Text("$_patientName will be removed from today's queue."),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Back')),
+          FilledButton(onPressed: () => Navigator.pop(c, true), child: const Text('No-show')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await QueueService.finishVisit(reference.id, outcome: ApptStatus.noShow);
+      await SchedulingService.releaseSlotAndLock(reference.id);
+      messenger.showSnackBar(SnackBar(content: Text('$_patientName marked as no-show.')));
+    } catch (error) {
+      messenger.showSnackBar(SnackBar(content: Text('Could not update. ${friendlyErrorMessage(error)}')));
+    }
+  }
+
   Future<void> _markDone(BuildContext context) async {
     // Captured up front: the row leaves the list as soon as its status
     // changes, so its context is gone by the time the write finishes.
@@ -1569,9 +1554,15 @@ class _AppointmentRow extends StatelessWidget {
     }
   }
 
+  String _proposedLabel() {
+    final p = data['proposedTime'];
+    return p is Timestamp ? _format12Hour(p.toDate()) : '';
+  }
+
   @override
   Widget build(BuildContext context) {
     final queuePosition = (data['queuePosition'] as num?)?.toInt();
+    final status = QueueService.normalizeStatus(data['status']);
     final isRequest = view == _DeskView.requests;
     final scheduledDate = _scheduledTime ?? DateTime.now();
     final targetDateKey = SchedulingService.dateKey(scheduledDate);
@@ -1655,24 +1646,35 @@ class _AppointmentRow extends StatelessWidget {
                 const SizedBox(height: 7),
                 Text(_doctorName, style: Theme.of(context).textTheme.bodySmall),
                 if (isRequest) ...[
+                  if (status == ApptStatus.proposed) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      'Proposed ${_proposedLabel()} · waiting for patient',
+                      style: TextStyle(color: Colors.orange.shade900, fontSize: 12.5, fontWeight: FontWeight.w600),
+                    ),
+                  ] else if (_preferredTime != null) ...[
+                    const SizedBox(height: 6),
+                    Text('Prefers ${_format12Hour(_preferredTime!)}',
+                        style: Theme.of(context).textTheme.bodySmall),
+                  ],
                   const SizedBox(height: 12),
                   Row(
                     children: [
                       if (!isDateClosed) ...[
                         Expanded(
                           child: FilledButton(
-                            onPressed: () => _accept(context),
-                            child: const Text('Accept'),
+                            onPressed: () => _propose(context),
+                            child: Text(status == ApptStatus.proposed ? 'Change time' : 'Propose time'),
                           ),
                         ),
                         const SizedBox(width: 8),
-                      ],
-                      Expanded(
-                        child: OutlinedButton(
-                          onPressed: () => _reschedule(context),
-                          child: const Text('Reschedule'),
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () => _accept(context),
+                            child: const Text('Confirm now'),
+                          ),
                         ),
-                      ),
+                      ],
                       IconButton(
                         onPressed: () => _reject(context),
                         tooltip: 'Reject',
@@ -1680,34 +1682,51 @@ class _AppointmentRow extends StatelessWidget {
                       ),
                     ],
                   ),
-                ] else if (view == _DeskView.queue)
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      if (data['status'] == 'in_progress')
-                        Chip(
-                          avatar: const Icon(Icons.medical_services_outlined,
-                              size: 16, color: Colors.white),
-                          label: const Text('In progress'),
-                          labelStyle: const TextStyle(
-                              color: Colors.white, fontWeight: FontWeight.w600),
-                          backgroundColor: Theme.of(context).colorScheme.primary,
-                          visualDensity: VisualDensity.compact,
-                        )
-                      else
-                        FilledButton.tonalIcon(
-                          onPressed: () => _startVisit(context),
-                          icon: const Icon(Icons.play_arrow_rounded, size: 18),
-                          label: const Text('Start visit'),
-                        ),
-                      const SizedBox(width: 8),
-                      TextButton.icon(
-                        onPressed: () => _markDone(context),
-                        icon: const Icon(Icons.check_circle_outline),
-                        label: const Text('Mark done'),
-                      ),
-                    ],
+                ] else if (view == _DeskView.queue) ...[
+                  const SizedBox(height: 10),
+                  Wrap(
+                    alignment: WrapAlignment.end,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    spacing: 8,
+                    runSpacing: 6,
+                    children: switch (status) {
+                      ApptStatus.inConsultation => [
+                          _ConsultTimer(data: data),
+                          FilledButton.icon(
+                            onPressed: () => _markDone(context),
+                            icon: const Icon(Icons.check_circle_outline, size: 18),
+                            label: const Text('Done'),
+                          ),
+                        ],
+                      ApptStatus.checkedIn => [
+                          const Chip(
+                            avatar: Icon(Icons.how_to_reg, size: 16),
+                            label: Text('Arrived'),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          TextButton(onPressed: () => _noShow(context), child: const Text('No-show')),
+                          FilledButton.tonalIcon(
+                            onPressed: () => _startVisit(context),
+                            icon: const Icon(Icons.play_arrow_rounded, size: 18),
+                            label: const Text('Call in'),
+                          ),
+                        ],
+                      _ => [
+                          TextButton(onPressed: () => _noShow(context), child: const Text('No-show')),
+                          OutlinedButton.icon(
+                            onPressed: () => _checkIn(context),
+                            icon: const Icon(Icons.how_to_reg, size: 18),
+                            label: const Text('Check in'),
+                          ),
+                          FilledButton.tonalIcon(
+                            onPressed: () => _startVisit(context),
+                            icon: const Icon(Icons.play_arrow_rounded, size: 18),
+                            label: const Text('Call in'),
+                          ),
+                        ],
+                    },
                   ),
+                ],
               ],
             ),
           ),
@@ -1717,3 +1736,191 @@ class _AppointmentRow extends StatelessWidget {
   }
 }
 
+
+/// Top of Today's Queue: who is in, how many wait, and the next token to call.
+/// Checked-in patients are called before ones who have not arrived yet.
+class _NowServingBar extends StatelessWidget {
+  const _NowServingBar({required this.docs});
+
+  final List<QueryDocumentSnapshot<Map<String, dynamic>>> docs;
+
+  static int _token(QueryDocumentSnapshot<Map<String, dynamic>> d) =>
+      (d.data()['queuePosition'] as num?)?.toInt() ?? 1 << 30;
+
+  static String _status(QueryDocumentSnapshot<Map<String, dynamic>> d) =>
+      QueueService.normalizeStatus(d.data()['status']);
+
+  Future<void> _callNext(
+      BuildContext context, QueryDocumentSnapshot<Map<String, dynamic>> next) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await QueueService.startConsultation(next.id);
+      messenger.showSnackBar(SnackBar(
+          content: Text('Token #${_token(next)} called in.')));
+    } catch (error) {
+      messenger.showSnackBar(SnackBar(
+          content: Text('Could not call next. ${friendlyErrorMessage(error)}')));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final current = docs.where((d) => _status(d) == ApptStatus.inConsultation).toList();
+    final waiting = docs.where((d) => ApptStatus.waiting.contains(_status(d))).toList()
+      ..sort((a, b) {
+        final arrived = (_status(a) == ApptStatus.checkedIn ? 0 : 1)
+            .compareTo(_status(b) == ApptStatus.checkedIn ? 0 : 1);
+        return arrived != 0 ? arrived : _token(a).compareTo(_token(b));
+      });
+    final next = waiting.isEmpty ? null : waiting.first;
+    final doctorId = docs.isEmpty ? '' : (docs.first.data()['doctorId'] ?? '').toString();
+    final isThisDoctor = doctorId.isNotEmpty &&
+        AuthService.userRoles.doctorProfileId == doctorId;
+
+    return Card(
+      color: theme.colorScheme.primaryContainer,
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Now serving', style: theme.textTheme.labelMedium),
+                      Text(
+                        current.isEmpty ? '—' : '#${_token(current.first)}',
+                        style: theme.textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w800),
+                      ),
+                    ],
+                  ),
+                ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text('${waiting.length} waiting', style: theme.textTheme.titleSmall),
+                    if (next != null)
+                      Text('Next: #${_token(next)}', style: theme.textTheme.bodySmall),
+                  ],
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                if (doctorId.isNotEmpty) _AvgConsultChip(doctorId: doctorId, editable: isThisDoctor),
+                const Spacer(),
+                FilledButton.icon(
+                  onPressed: current.isEmpty && next != null ? () => _callNext(context, next) : null,
+                  icon: const Icon(Icons.campaign_outlined, size: 18),
+                  label: Text(current.isNotEmpty ? 'Finish current first' : 'Call next'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Average consult length used for autoAdvanceAt. Only the doctor can change it.
+class _AvgConsultChip extends StatelessWidget {
+  const _AvgConsultChip({required this.doctorId, required this.editable});
+
+  final String doctorId;
+  final bool editable;
+
+  Future<void> _edit(BuildContext context, int current) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final picked = await showDialog<int>(
+      context: context,
+      builder: (c) => SimpleDialog(
+        title: const Text('Average consultation'),
+        children: [5, 10, 15, 20, 30]
+            .map((m) => ListTile(
+                  title: Text('$m minutes'),
+                  trailing: m == current ? const Icon(Icons.check) : null,
+                  onTap: () => Navigator.pop(c, m),
+                ))
+            .toList(),
+      ),
+    );
+    if (picked == null || picked == current) return;
+    try {
+      await FirebaseFirestore.instance.collection('doctors').doc(doctorId).update({
+        'avgConsultMinutes': picked,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    } catch (error) {
+      messenger.showSnackBar(SnackBar(content: Text('Could not save. ${friendlyErrorMessage(error)}')));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance.collection('doctors').doc(doctorId).snapshots(),
+      builder: (context, snap) {
+        final minutes = (snap.data?.data()?['avgConsultMinutes'] as num?)?.toInt() ??
+            QueueService.defaultConsultMinutes;
+        return ActionChip(
+          avatar: const Icon(Icons.timer_outlined, size: 16),
+          label: Text('~$minutes min / patient'),
+          onPressed: editable ? () => _edit(context, minutes) : null,
+        );
+      },
+    );
+  }
+}
+
+/// Elapsed time for the patient in consultation. Turns red once past
+/// autoAdvanceAt; the visit is never ended automatically.
+class _ConsultTimer extends StatefulWidget {
+  const _ConsultTimer({required this.data});
+
+  final Map<String, dynamic> data;
+
+  @override
+  State<_ConsultTimer> createState() => _ConsultTimerState();
+}
+
+class _ConsultTimerState extends State<_ConsultTimer> {
+  Timer? _tick;
+
+  @override
+  void initState() {
+    super.initState();
+    _tick = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _tick?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final started = widget.data['startedAt'];
+    final due = widget.data['autoAdvanceAt'];
+    final now = DateTime.now();
+    final minutes = started is Timestamp ? now.difference(started.toDate()).inMinutes : 0;
+    final overrun = due is Timestamp && now.isAfter(due.toDate());
+    final color = overrun ? Colors.red.shade700 : Theme.of(context).colorScheme.primary;
+    return Chip(
+      avatar: Icon(overrun ? Icons.warning_amber_rounded : Icons.medical_services_outlined,
+          size: 16, color: Colors.white),
+      label: Text(overrun ? 'Overrunning · $minutes min' : 'In consultation · $minutes min'),
+      labelStyle: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+      backgroundColor: color,
+      visualDensity: VisualDensity.compact,
+    );
+  }
+}

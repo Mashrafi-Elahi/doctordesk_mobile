@@ -1,5 +1,6 @@
 import 'dart:isolate';
 import 'scheduling_service.dart';
+import 'queue_service.dart';
 import 'chamber_resolver.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
@@ -2319,6 +2320,7 @@ class FirestoreService {
     String? doctorName,
     String? operatorNote,
     String status = 'waiting',
+    DateTime? preferredTime,
   }) async {
     final uid = _auth.currentUser?.uid;
     if (uid == null || uid.isEmpty) {
@@ -2423,6 +2425,7 @@ class FirestoreService {
           'doctorId': resolvedDoctorId,
           'operatorNote': operatorNote ?? '',
           'status': apptStatus,
+          if (preferredTime != null) 'preferredTime': Timestamp.fromDate(preferredTime),
           'handledBy': handledBy,
           'activeBookingKey': activeBookingKey,
           'userId': uid,
@@ -3270,11 +3273,8 @@ class FirestoreService {
     final activeKey = apptData['activeBookingKey']?.toString();
     final patientUid = (apptData['userId'] ?? '').toString();
 
+    await QueueService.cancelByPatient(appointmentId);
     await SchedulingService.releaseSlotAndLock(appointmentId);
-    await apptRef.update({
-      'status': 'cancelled',
-      'updatedAt': FieldValue.serverTimestamp(),
-    });
 
     if (activeKey != null && activeKey.isNotEmpty) {
       try {
@@ -3388,14 +3388,10 @@ class FirestoreService {
     } catch (_) {}
   }
 
-  /// Desk calls the patient in: confirmed -> in_progress. The visit stays in
-  /// the queue view until it is marked done.
-  static Future<void> markAppointmentInProgress(String appointmentId) async {
-    await _db.collection('appointments').doc(appointmentId).update({
-      'status': 'in_progress',
-      'startedAt': FieldValue.serverTimestamp(),
-      'updatedAt': FieldValue.serverTimestamp(),
-    });
+  /// Desk calls the patient in: confirmed/checked_in -> in_consultation. The
+  /// visit stays in the queue view until it is marked done.
+  static Future<void> markAppointmentInProgress(String appointmentId) {
+    return QueueService.startConsultation(appointmentId);
   }
 
   /// Returns true when a follow-up chat was unlocked for the patient.
@@ -3411,12 +3407,8 @@ class FirestoreService {
     final doctorName = (apptData['doctorName'] ?? 'Doctor').toString();
 
     // 1. Mark appointment completed ('done' aligns with AppointmentQueries.completedForChamber / completedForDoctor)
+    await QueueService.finishVisit(appointmentId, outcome: ApptStatus.done);
     await SchedulingService.releaseSlotAndLock(appointmentId);
-    await apptRef.update({
-      'status': 'done',
-      'completedAt': FieldValue.serverTimestamp(),
-      'updatedAt': FieldValue.serverTimestamp(),
-    });
 
     // 2. Release active_bookings lock on completion
     final activeKey = apptData['activeBookingKey']?.toString();

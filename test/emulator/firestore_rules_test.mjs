@@ -801,3 +801,159 @@ describe('scheduling algorithm and atomic reservation rules', () => {
     });
   });
 });
+
+describe('per-doctor daily queue and appointment lifecycle', () => {
+  const QID = 'chamber-a_doctor-profile_20300101';
+  const proposedAt = new Date('2030-01-01T11:00:00Z');
+
+  async function seedQueue({ appt = {}, queue = {} } = {}) {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const db = context.firestore();
+      await setDoc(doc(db, 'appointments/appt-p'), requestedAppointment({
+        status: 'proposed',
+        proposedTime: proposedAt,
+        queueId: QID,
+        slotId: 'doctor-profile_20300101_1100',
+        ...appt,
+      }));
+      await setDoc(doc(db, `queues/${QID}`), {
+        chamberId: 'chamber-a',
+        doctorId: 'doctor-profile',
+        date: '20300101',
+        lastNumber: 2,
+        currentServing: 0,
+        waitingTokens: [1, 2],
+        waitingCount: 2,
+        ...queue,
+      });
+      await setDoc(doc(db, 'doctor_slots/doctor-profile_20300101_1100'), {
+        doctorId: 'doctor-profile',
+        chamberId: 'chamber-a',
+        appointmentId: 'appt-p',
+        date: '20300101',
+      });
+    });
+  }
+
+  function accept(db, token, waiting) {
+    return runTransaction(db, async (tx) => {
+      const apptRef = doc(db, 'appointments/appt-p');
+      const qRef = doc(db, `queues/${QID}`);
+      await tx.get(apptRef);
+      await tx.get(qRef);
+      tx.set(qRef, {
+        chamberId: 'chamber-a',
+        doctorId: 'doctor-profile',
+        date: '20300101',
+        lastNumber: token,
+        currentServing: 0,
+        waitingTokens: waiting,
+        waitingCount: waiting.length,
+        lastTouchedAppointmentId: 'appt-p',
+      }, { merge: true });
+      tx.update(apptRef, {
+        status: 'confirmed',
+        scheduledTime: proposedAt,
+        queuePosition: token,
+        confirmedAt: new Date(),
+        updatedAt: new Date(),
+      });
+    });
+  }
+
+  it('lets the patient accept a proposal and take the next token', async () => {
+    await seedQueue();
+    const patientDb = testEnv.authenticatedContext('patient').firestore();
+    await assertSucceeds(accept(patientDb, 3, [1, 2, 3]));
+  });
+
+  it('refuses a patient who skips ahead to a later token', async () => {
+    await seedQueue();
+    const patientDb = testEnv.authenticatedContext('patient').firestore();
+    await assertFails(accept(patientDb, 7, [1, 2, 7]));
+  });
+
+  it('refuses a patient accepting at a different time than proposed', async () => {
+    await seedQueue();
+    const patientDb = testEnv.authenticatedContext('patient').firestore();
+    await assertFails(runTransaction(patientDb, async (tx) => {
+      const apptRef = doc(patientDb, 'appointments/appt-p');
+      await tx.get(apptRef);
+      tx.update(apptRef, {
+        status: 'confirmed',
+        scheduledTime: new Date('2030-01-01T09:00:00Z'),
+        queuePosition: 3,
+        updatedAt: new Date(),
+      });
+    }));
+  });
+
+  it('refuses a stranger accepting someone else\'s proposal', async () => {
+    await seedQueue();
+    const strangerDb = testEnv.authenticatedContext('stranger').firestore();
+    await assertFails(accept(strangerDb, 3, [1, 2, 3]));
+  });
+
+  it('lets the patient decline and free the held slot', async () => {
+    await seedQueue();
+    const patientDb = testEnv.authenticatedContext('patient').firestore();
+    await assertSucceeds(updateDoc(doc(patientDb, 'appointments/appt-p'), {
+      status: 'declined', declinedAt: new Date(), updatedAt: new Date(),
+    }));
+    await assertSucceeds(deleteDoc(doc(patientDb, 'doctor_slots/doctor-profile_20300101_1100')));
+  });
+
+  it('refuses a patient freeing a slot of an appointment that is still open', async () => {
+    await seedQueue();
+    const patientDb = testEnv.authenticatedContext('patient').firestore();
+    await assertFails(deleteDoc(doc(patientDb, 'doctor_slots/doctor-profile_20300101_1100')));
+  });
+
+  it('lets a patient cancel and remove only their own token', async () => {
+    await seedQueue({
+      appt: { status: 'confirmed', queuePosition: 2, scheduledTime: proposedAt },
+    });
+    const patientDb = testEnv.authenticatedContext('patient').firestore();
+    const cancel = (waiting) => runTransaction(patientDb, async (tx) => {
+      const apptRef = doc(patientDb, 'appointments/appt-p');
+      const qRef = doc(patientDb, `queues/${QID}`);
+      await tx.get(apptRef);
+      await tx.get(qRef);
+      tx.set(qRef, {
+        waitingTokens: waiting,
+        waitingCount: waiting.length,
+        lastTouchedAppointmentId: 'appt-p',
+      }, { merge: true });
+      tx.update(apptRef, { status: 'cancelled', cancelledBy: 'patient', updatedAt: new Date() });
+    });
+    await assertFails(cancel([2]));
+    await assertSucceeds(cancel([1]));
+  });
+
+  it('lets the assigned operator run the queue but not skip lifecycle steps', async () => {
+    await seedQueue({ appt: { status: 'requested' } });
+    const opDb = testEnv.authenticatedContext('operator').firestore();
+    await assertFails(updateDoc(doc(opDb, 'appointments/appt-p'), { status: 'done' }));
+    await assertFails(updateDoc(doc(opDb, 'appointments/appt-p'), { status: 'checked_in' }));
+    await assertSucceeds(updateDoc(doc(opDb, 'appointments/appt-p'), { status: 'proposed' }));
+    await assertSucceeds(updateDoc(doc(opDb, `queues/${QID}`), { currentServing: 1 }));
+  });
+
+  it('refuses another doctor writing this doctor\'s queue', async () => {
+    await seedQueue();
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'users/other-doctor'), {
+        roles: { isDoctor: true }, doctorProfileId: 'other-profile',
+      });
+    });
+    const otherDb = testEnv.authenticatedContext('other-doctor').firestore();
+    await assertFails(updateDoc(doc(otherDb, `queues/${QID}`), { currentServing: 2 }));
+  });
+
+  it('refuses a queue doc whose ID does not match its chamber, doctor and date', async () => {
+    const opDb = testEnv.authenticatedContext('operator').firestore();
+    await assertFails(setDoc(doc(opDb, 'queues/chamber-a_doctor-profile_20300102'), {
+      chamberId: 'chamber-a', doctorId: 'doctor-profile', date: '20300101', lastNumber: 1,
+    }));
+  });
+});

@@ -1,5 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import 'queue_service.dart';
+
 /// Single source of truth for all appointment-related Firestore queries.
 /// Used by: operator desk, doctor queue desk, doctor home counters,
 /// manage-tab badges, and patient appointments screen.
@@ -14,7 +16,7 @@ class AppointmentQueries {
         .where('chamberId', isEqualTo: chamberId)
         .where('doctorId', isEqualTo: doctorId)
         .where('handledBy', isEqualTo: 'operator')
-        .where('status', isEqualTo: 'requested')
+        .where('status', whereIn: const ['requested', 'proposed'])
         .orderBy('createdAt', descending: false);
   }
 
@@ -45,7 +47,7 @@ class AppointmentQueries {
         .collection('appointments')
         .where('chamberId', isEqualTo: chamberId)
         .where('handledBy', isEqualTo: 'operator')
-        .where('status', isEqualTo: 'requested')
+        .where('status', whereIn: const ['requested', 'proposed'])
         .orderBy('createdAt', descending: false);
   }
 
@@ -56,12 +58,12 @@ class AppointmentQueries {
         .collection('appointments')
         .where('doctorId', isEqualTo: doctorProfileId)
         .where('handledBy', isEqualTo: 'doctor')
-        .where('status', isEqualTo: 'requested')
+        .where('status', whereIn: const ['requested', 'proposed'])
         .orderBy('createdAt', descending: false);
   }
 
   /// Today's active queue for an operator chamber and doctor:
-  /// status in [confirmed, in_progress] + scheduledTime within today.
+  /// status in ApptStatus.active + scheduledTime within today.
   static Query<Map<String, dynamic>> todayQueueForChamberAndDoctor(
       String chamberId, String doctorId) {
     final now = DateTime.now();
@@ -71,7 +73,7 @@ class AppointmentQueries {
         .collection('appointments')
         .where('chamberId', isEqualTo: chamberId)
         .where('doctorId', isEqualTo: doctorId)
-        .where('status', whereIn: ['confirmed', 'in_progress'])
+        .where('status', whereIn: ApptStatus.active)
         .where('scheduledTime',
             isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
         .where('scheduledTime', isLessThan: Timestamp.fromDate(endOfDay))
@@ -89,7 +91,7 @@ class AppointmentQueries {
     return _db
         .collection('appointments')
         .where('chamberId', isEqualTo: chamberId)
-        .where('status', whereIn: ['confirmed', 'in_progress'])
+        .where('status', whereIn: ApptStatus.active)
         .where('scheduledTime',
             isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
         .where('scheduledTime', isLessThan: Timestamp.fromDate(endOfDay))
@@ -105,7 +107,7 @@ class AppointmentQueries {
     return _db
         .collection('appointments')
         .where('doctorId', isEqualTo: doctorProfileId)
-        .where('status', whereIn: ['confirmed', 'in_progress'])
+        .where('status', whereIn: ApptStatus.active)
         .where('scheduledTime',
             isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
         .where('scheduledTime', isLessThan: Timestamp.fromDate(endOfDay))

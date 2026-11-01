@@ -47,6 +47,92 @@ service cloud.firestore {
         exists(/databases/$(database)/documents/chamber_operators/$(chamberId + '_' + doctorId + '_' + request.auth.uid));
     }
 
+    // The chamber desk for one doctor: admin, that doctor, or an operator
+    // assigned to (chamber, doctor).
+    function isDeskFor(chamberId, doctorId) {
+      return isAdmin() ||
+        (doctorId != null &&
+         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         getUserData().get('doctorProfileId', null) == doctorId) ||
+        isAssignedOperatorFor(chamberId, doctorId);
+    }
+
+    // Appointment lifecycle. Mirrors QueueService.transitions in the app.
+    // 'in_progress' is the legacy name for 'in_consultation'.
+    function allowedNext() {
+      return {
+        'requested': ['proposed', 'confirmed', 'rejected', 'cancelled'],
+        'proposed': ['proposed', 'confirmed', 'declined', 'rejected', 'cancelled'],
+        'confirmed': ['confirmed', 'checked_in', 'in_consultation', 'no_show', 'cancelled'],
+        'checked_in': ['checked_in', 'in_consultation', 'no_show', 'cancelled'],
+        'in_consultation': ['in_consultation', 'done', 'cancelled'],
+        'in_progress': ['in_progress', 'in_consultation', 'done', 'cancelled']
+      };
+    }
+
+    function statusChangeOk(from, to) {
+      return from == to || (from in allowedNext() && to in allowedNext()[from]);
+    }
+
+    // Patient-side appointment updates: cancel, decline or accept a proposal.
+    function isPatientApptUpdate() {
+      let before = resource.data;
+      let after = request.resource.data;
+      let changed = after.diff(before).affectedKeys();
+      return before.userId == request.auth.uid && (
+        (before.status in ['requested', 'proposed', 'confirmed'] &&
+         after.status == 'cancelled' &&
+         changed.hasOnly(['status', 'updatedAt', 'cancelledBy'])) ||
+        (before.status == 'proposed' &&
+         after.status == 'declined' &&
+         changed.hasOnly(['status', 'updatedAt', 'declinedAt'])) ||
+        (before.status == 'proposed' &&
+         after.status == 'confirmed' &&
+         changed.hasOnly(['status', 'scheduledTime', 'queuePosition', 'queueId', 'confirmedAt', 'updatedAt']) &&
+         after.scheduledTime == before.proposedTime &&
+         after.queueId == before.queueId &&
+         after.queuePosition == getAfter(/databases/$(database)/documents/queues/$(before.queueId)).data.lastNumber)
+      );
+    }
+
+    // A patient who accepts a proposal takes the next token in that queue.
+    function isPatientQueueJoin(queueId) {
+      let d = request.resource.data;
+      let prev = resource == null ? {} : resource.data;
+      let prevLast = prev.get('lastNumber', 0) > prev.get('lastQueuePosition', 0)
+        ? prev.get('lastNumber', 0) : prev.get('lastQueuePosition', 0);
+      let prevWaiting = prev.get('waitingTokens', []);
+      let appt = getAfter(/databases/$(database)/documents/appointments/$(d.lastTouchedAppointmentId)).data;
+      return appt.userId == request.auth.uid &&
+        appt.status == 'confirmed' &&
+        appt.queueId == queueId &&
+        d.chamberId == appt.chamberId &&
+        d.doctorId == appt.doctorId &&
+        d.lastNumber == prevLast + 1 &&
+        appt.queuePosition == d.lastNumber &&
+        d.waitingTokens.size() == prevWaiting.size() + 1 &&
+        d.waitingTokens.hasAll(prevWaiting) &&
+        d.lastNumber in d.waitingTokens &&
+        d.waitingCount == d.waitingTokens.size() &&
+        d.get('currentServing', 0) == prev.get('currentServing', 0) &&
+        d.get('currentAppointmentId', '') == prev.get('currentAppointmentId', '');
+    }
+
+    // A patient who cancels gives up only their own token.
+    function isPatientQueueLeave(queueId) {
+      let d = request.resource.data;
+      let prev = resource.data;
+      let appt = getAfter(/databases/$(database)/documents/appointments/$(d.lastTouchedAppointmentId)).data;
+      let changed = d.diff(prev).affectedKeys();
+      return appt.userId == request.auth.uid &&
+        appt.status == 'cancelled' &&
+        appt.queueId == queueId &&
+        d.waitingTokens == prev.get('waitingTokens', []).removeAll([appt.queuePosition]) &&
+        d.waitingCount == d.waitingTokens.size() &&
+        changed.hasOnly(['waitingTokens', 'waitingCount', 'lastTouchedAppointmentId', 'updatedAt', 'currentServing']) &&
+        (!('currentServing' in changed) || d.currentServing == 0);
+    }
+
     function isDoctorManagingOperator() {
       return isDoctor() &&
         getUserData().doctorProfileId != null &&
@@ -183,6 +269,7 @@ service cloud.firestore {
           request.resource.data.status == 'requested' &&
           (!('source' in request.resource.data) || request.resource.data.source == null) &&
           (!('queuePosition' in request.resource.data) || request.resource.data.queuePosition == null) &&
+          !request.resource.data.keys().hasAny(['queueId', 'proposedTime', 'proposedBy', 'checkedInAt', 'startedAt']) &&
           exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
           (!('doctorProfileId' in getUserData()) ||
            getUserData().doctorProfileId != request.resource.data.doctorId) &&
@@ -213,13 +300,9 @@ service cloud.firestore {
       );
       allow update: if isAuthenticated() && (
         isAdmin() ||
-        (resource.data.doctorId != null &&
-         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-         getUserData().doctorProfileId == resource.data.doctorId) ||
-        isAssignedOperatorFor(resource.data.chamberId, resource.data.doctorId) ||
-        (resource.data.userId == request.auth.uid &&
-         request.resource.data.status == 'cancelled' &&
-         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt']))
+        (isDeskFor(resource.data.chamberId, resource.data.doctorId) &&
+         statusChangeOk(resource.data.status, request.resource.data.status)) ||
+        isPatientApptUpdate()
       );
       allow delete: if isAuthenticated() && (
         resource.data.userId == request.auth.uid ||
@@ -247,6 +330,10 @@ service cloud.firestore {
       );
       allow delete: if isAuthenticated() && (
         isAdmin() ||
+        (resource.data.appointmentId is string &&
+         exists(/databases/$(database)/documents/appointments/$(resource.data.appointmentId)) &&
+         get(/databases/$(database)/documents/appointments/$(resource.data.appointmentId)).data.userId == request.auth.uid &&
+         get(/databases/$(database)/documents/appointments/$(resource.data.appointmentId)).data.status in ['cancelled', 'declined']) ||
         (resource.data.doctorId != null &&
          exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
          getUserData().doctorProfileId == resource.data.doctorId) ||
@@ -286,16 +373,20 @@ service cloud.firestore {
     }
 
     // 4b. Queue Counter Documents (queues/{chamberId}_{yyyyMMdd})
+    // queues/{chamberId}_{doctorId}_{yyyyMMdd}. Token numbers only, so any
+    // signed-in user may read. The doc ID must match its chamber/doctor/date.
     match /queues/{queueId} {
-      allow read, write: if isAuthenticated() && (
-        isAdmin() ||
-        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && (
-          (getUserData().operatorAssignments != null &&
-           (resource == null || resource.data.chamberId in getUserData().operatorAssignments ||
-            request.resource.data.chamberId in getUserData().operatorAssignments)) ||
-          (getUserData().doctorProfileId != null)
-        ))
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated() &&
+        queueId == request.resource.data.chamberId + '_' + request.resource.data.doctorId + '_' + request.resource.data.date &&
+        (resource == null || (
+          request.resource.data.chamberId == resource.data.chamberId &&
+          request.resource.data.doctorId == resource.data.doctorId)) && (
+        isDeskFor(request.resource.data.chamberId, request.resource.data.doctorId) ||
+        isPatientQueueJoin(queueId) ||
+        (resource != null && isPatientQueueLeave(queueId))
       );
+      allow delete: if isAdmin();
     }
 
     // 5. Notifications Collection

@@ -9,6 +9,7 @@ import '../services/data_service.dart';
 import '../services/auth_service.dart';
 import '../services/app_language.dart';
 import '../services/chamber_resolver.dart';
+import '../services/queue_service.dart';
 import '../widgets/state_views.dart';
 import '../widgets/profile_avatar_button.dart';
 import 'doctors_screen.dart';
@@ -124,9 +125,7 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
                         d.data()['status']?.toString().toLowerCase() ?? '';
                     // 'done' is the terminal status the desk sets; 'completed' is legacy.
                     return !_pastStatuses.contains(status) &&
-                        status != 'cancelled' &&
-                        status != 'rejected' &&
-                        status != 'no_show';
+                        !ApptStatus.terminal.contains(status);
                   }).toList();
 
                   final past = docs.where((d) {
@@ -155,11 +154,15 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
                                     'Specialist Doctor';
                                 final patient =
                                     data['patientName'] ?? 'Patient';
-                                final status = data['status'] ?? 'waiting';
-                                final isRequested = status == 'requested';
-                                final isConfirmed = status == 'confirmed';
-                                final pos = data['queuePosition'];
-                                final ts = data['scheduledTime'];
+                                final status = QueueService.normalizeStatus(data['status'] ?? 'waiting');
+                                final isRequested = status == ApptStatus.requested;
+                                final isProposed = status == ApptStatus.proposed;
+                                final pos = (data['queuePosition'] as num?)?.toInt();
+                                final hasToken = pos != null &&
+                                    (status == ApptStatus.confirmed ||
+                                        status == ApptStatus.checkedIn ||
+                                        status == ApptStatus.inConsultation);
+                                final ts = isProposed ? data['proposedTime'] : data['scheduledTime'];
                                 String dateStr = 'Scheduled';
                                 if (ts is Timestamp) {
                                   final dt = ts.toDate();
@@ -169,7 +172,7 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
                                     final h = dt.hour > 12 ? dt.hour - 12 : (dt.hour == 0 ? 12 : dt.hour);
                                     final p = dt.hour >= 12 ? 'PM' : 'AM';
                                     dateStr =
-                                        '${dt.day}/${dt.month}/${dt.year} at $h:${dt.minute.toString().padLeft(2, '0')} $p';
+                                        '${isProposed ? 'Proposed: ' : ''}${dt.day}/${dt.month}/${dt.year} at $h:${dt.minute.toString().padLeft(2, '0')} $p';
                                   }
                                 }
 
@@ -245,11 +248,7 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
                                                 ),
                                               ),
                                               child: Text(
-                                                status == 'requested'
-                                                    ? 'AWAITING CONFIRMATION'
-                                                    : status
-                                                        .replaceAll('_', ' ')
-                                                        .toUpperCase(),
+                                                _statusLabel(status),
                                                 style: TextStyle(
                                                   color: status == 'requested'
                                                       ? Colors.amber.shade900
@@ -279,9 +278,9 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
                                                         fontSize: 13)),
                                               ],
                                             ),
-                                            if (isConfirmed && pos != null)
+                                            if (hasToken)
                                               Text(
-                                                'Queue #$pos',
+                                                'Token #$pos',
                                                 style: TextStyle(
                                                   fontWeight: FontWeight.bold,
                                                   color:
@@ -291,6 +290,14 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
                                               ),
                                           ],
                                         ),
+                                        if (hasToken)
+                                          _LiveQueueLine(
+                                            queueId: (data['queueId'] ?? '').toString(),
+                                            token: pos,
+                                            status: status,
+                                          ),
+                                        if (isProposed)
+                                          _ProposalActions(appointmentId: upcoming[i].id),
                                         const SizedBox(height: 6),
                                         Row(
                                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -301,7 +308,8 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
                                                   fontSize: 12.5,
                                                   color: Colors.grey.shade700),
                                             ),
-                                            if (status != 'cancelled' && status != 'done')
+                                            if (const {ApptStatus.requested, ApptStatus.proposed, ApptStatus.confirmed}
+                                                .contains(status))
                                               TextButton(
                                                 style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
                                                 onPressed: () async {
@@ -322,7 +330,15 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
                                                     ),
                                                   );
                                                   if (ok == true) {
-                                                    await DataService.cancelAppointmentByPatient(apptDocId);
+                                                    try {
+                                                      await DataService.cancelAppointmentByPatient(apptDocId);
+                                                    } catch (e) {
+                                                      if (context.mounted) {
+                                                        ScaffoldMessenger.of(context).showSnackBar(
+                                                          SnackBar(content: Text(friendlyErrorMessage(e))),
+                                                        );
+                                                      }
+                                                    }
                                                   }
                                                 },
                                                 child: const Text('Cancel', style: TextStyle(color: Colors.red, fontSize: 12)),
@@ -1211,4 +1227,128 @@ class _EmptyState extends StatelessWidget {
   @override
   Widget build(BuildContext context) =>
       EmptyStateView(icon: icon, title: title, message: subtitle);
+}
+
+String _statusLabel(String status) => switch (status) {
+      ApptStatus.requested => 'AWAITING TIME',
+      ApptStatus.proposed => 'ACTION NEEDED',
+      ApptStatus.confirmed => 'CONFIRMED',
+      ApptStatus.checkedIn => 'CHECKED IN',
+      ApptStatus.inConsultation => 'WITH DOCTOR',
+      _ => status.replaceAll('_', ' ').toUpperCase(),
+    };
+
+/// "Now serving #9 · 2 ahead of you", from the doctor's day queue. Only token
+/// numbers are read, never other patients' appointments.
+class _LiveQueueLine extends StatelessWidget {
+  const _LiveQueueLine({required this.queueId, required this.token, required this.status});
+
+  final String queueId;
+  final int token;
+  final String status;
+
+  @override
+  Widget build(BuildContext context) {
+    if (status == ApptStatus.inConsultation) {
+      return const _QueueBanner(text: "It's your turn — please go in.", highlight: true);
+    }
+    if (queueId.isEmpty) return const SizedBox.shrink();
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance.collection('queues').doc(queueId).snapshots(),
+      builder: (context, snap) {
+        final q = snap.data?.data();
+        if (q == null) return const SizedBox.shrink();
+        final serving = (q['currentServing'] as num?)?.toInt() ?? 0;
+        final ahead = QueueService.peopleAhead(QueueService.waitingTokensOf(q), token);
+        final aheadText = ahead == 0 ? "You're next" : '$ahead ahead of you';
+        return _QueueBanner(
+          text: '${serving == 0 ? 'Not started yet' : 'Now serving #$serving'} · $aheadText',
+          highlight: ahead == 0,
+        );
+      },
+    );
+  }
+}
+
+class _QueueBanner extends StatelessWidget {
+  const _QueueBanner({required this.text, this.highlight = false});
+
+  final String text;
+  final bool highlight;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final fg = highlight ? scheme.onPrimary : scheme.onPrimaryContainer;
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(top: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: highlight ? scheme.primary : scheme.primaryContainer,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.groups_2_outlined, size: 18, color: fg),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(text, style: TextStyle(fontWeight: FontWeight.w700, color: fg)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Accept or decline the time the chamber proposed.
+class _ProposalActions extends StatefulWidget {
+  const _ProposalActions({required this.appointmentId});
+
+  final String appointmentId;
+
+  @override
+  State<_ProposalActions> createState() => _ProposalActionsState();
+}
+
+class _ProposalActionsState extends State<_ProposalActions> {
+  bool _busy = false;
+
+  Future<void> _respond(bool accept) async {
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _busy = true);
+    try {
+      await QueueService.respondToProposal(widget.appointmentId, accept: accept);
+      messenger.showSnackBar(SnackBar(
+          content: Text(accept ? 'Confirmed. Your token is on the card.' : 'Proposed time declined.')));
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text(friendlyErrorMessage(e))));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 10),
+      child: Row(
+        children: [
+          Expanded(
+            child: OutlinedButton(
+              onPressed: _busy ? null : () => _respond(false),
+              child: const Text('Decline'),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: FilledButton(
+              onPressed: _busy ? null : () => _respond(true),
+              child: const Text('Accept time'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
