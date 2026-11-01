@@ -1778,61 +1778,12 @@ class _ReviewSheet extends StatefulWidget {
 class _ReviewSheetState extends State<_ReviewSheet> {
   int _selectedRating = 0;
   final _commentController = TextEditingController();
-  File? _proofFile;
-  double? _uploadProgress;
-  String? _proofDownloadUrl;
   bool _isSubmitting = false;
 
   @override
   void dispose() {
     _commentController.dispose();
     super.dispose();
-  }
-
-  Future<void> _pickAndUploadProof({ImageSource source = ImageSource.gallery}) async {
-    final uid = AuthService.currentUser!.uid;
-    final picker = ImagePicker();
-    final XFile? picked = await picker.pickImage(
-      source: source,
-      maxWidth: 1024,
-      maxHeight: 1024,
-      imageQuality: 70,
-    );
-    if (picked == null) return;
-
-    setState(() {
-      _proofFile = File(picked.path);
-      _uploadProgress = 0;
-      _proofDownloadUrl = null;
-    });
-
-    try {
-      final fileName = 'proof_${DateTime.now().millisecondsSinceEpoch}.jpg';
-      final ref = FirebaseStorage.instance.ref('reviews/$uid/$fileName');
-      final task = ref.putFile(_proofFile!);
-
-      task.snapshotEvents.listen((snapshot) {
-        if (!mounted) return;
-        setState(() {
-          _uploadProgress = snapshot.bytesTransferred / snapshot.totalBytes;
-        });
-      });
-
-      final snap = await task;
-      final url = await snap.ref.getDownloadURL();
-      if (!mounted) return;
-      setState(() {
-        _proofDownloadUrl = url;
-        _uploadProgress = null;
-      });
-    } catch (e) {
-      if (mounted) {
-        setState(() => _uploadProgress = null);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to upload image: $e')),
-        );
-      }
-    }
   }
 
   Future<void> _submit() async {
@@ -1844,7 +1795,6 @@ class _ReviewSheetState extends State<_ReviewSheet> {
         patientUid: AuthService.currentUser!.uid,
         rating: _selectedRating,
         comment: _commentController.text.trim(),
-        proofImageUrl: _proofDownloadUrl,
       );
       if (mounted) {
         Navigator.of(context).pop();
@@ -1958,98 +1908,6 @@ class _ReviewSheetState extends State<_ReviewSheet> {
             ),
 
             const SizedBox(height: 16),
-
-            // Proof upload
-            Text('Attach prescription or visit photo (optional)',
-                style: theme.textTheme.labelMedium
-                    ?.copyWith(color: Colors.grey[700], fontWeight: FontWeight.w600)),
-            const SizedBox(height: 4),
-            Text(
-              'Upload a prescription photo as proof of visit (compressed for fast mobile upload).',
-              style: TextStyle(color: Colors.grey[500], fontSize: 12),
-            ),
-            const SizedBox(height: 10),
-            if (_proofFile != null) ...[
-              Stack(
-                children: [
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: Image.file(_proofFile!,
-                        width: double.infinity, height: 140, fit: BoxFit.cover),
-                  ),
-                  Positioned(
-                    top: 6,
-                    right: 6,
-                    child: CircleAvatar(
-                      radius: 16,
-                      backgroundColor: Colors.black54,
-                      child: IconButton(
-                        icon: const Icon(Icons.close, size: 16, color: Colors.white),
-                        onPressed: () {
-                          setState(() {
-                            _proofFile = null;
-                            _proofDownloadUrl = null;
-                            _uploadProgress = null;
-                          });
-                        },
-                      ),
-                    ),
-                  ),
-                  if (_uploadProgress != null)
-                    Positioned.fill(
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: Colors.black38,
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Center(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              CircularProgressIndicator(
-                                value: _uploadProgress,
-                                color: Colors.white,
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
-                                '${((_uploadProgress ?? 0) * 100).toStringAsFixed(0)}% uploaded',
-                                style: const TextStyle(color: Colors.white, fontSize: 12),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-              const SizedBox(height: 10),
-            ] else ...[
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      icon: const Icon(Icons.camera_alt_outlined, size: 18),
-                      label: const Text('Camera'),
-                      onPressed: _uploadProgress != null
-                          ? null
-                          : () => _pickAndUploadProof(source: ImageSource.camera),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      icon: const Icon(Icons.photo_library_outlined, size: 18),
-                      label: const Text('Gallery'),
-                      onPressed: _uploadProgress != null
-                          ? null
-                          : () => _pickAndUploadProof(source: ImageSource.gallery),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-
-            const SizedBox(height: 24),
 
             // Submit
             SizedBox(

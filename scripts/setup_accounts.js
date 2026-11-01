@@ -315,10 +315,23 @@ async function setupAccounts() {
   for (const item of plannedUpdates) {
     const [col, docId] = item.target.split('/');
     const ref = db.collection(col).doc(docId);
-    batch.set(ref, item.data, { merge: true });
+    // set() stores 'roles.isDoctor' as a literal top-level key; nest dotted
+    // keys so merge updates the roles map instead.
+    batch.set(ref, nestDottedKeys(item.data), { merge: true });
   }
   await batch.commit();
   console.log(`[SUCCESS] Account setup applied successfully!`);
 }
 
 setupAccounts().catch(console.error).finally(() => process.exit(0));
+
+function nestDottedKeys(data) {
+  const out = {};
+  for (const [key, value] of Object.entries(data)) {
+    const parts = key.split('.');
+    let node = out;
+    for (const part of parts.slice(0, -1)) node = node[part] = node[part] || {};
+    node[parts[parts.length - 1]] = value;
+  }
+  return out;
+}
