@@ -569,9 +569,9 @@ class _ChamberScheduleHeader extends StatelessWidget {
                 } else if (status == 'closed') {
                   headerText = 'Today: Closed (${_formatTime(start)} to ${_formatTime(end)})';
                 } else if (status == 'full' || (totalCap > 0 && confirmedCount >= totalCap)) {
-                  headerText = 'Today: Fully booked ($confirmedCount of $totalCap booked)';
+                  headerText = 'Today: Fully booked';
                 } else {
-                  headerText = 'Today ${_formatTime(start)} to ${_formatTime(end)}, $slotMinutes min per patient, $confirmedCount of $totalCap booked';
+                  headerText = 'Today ${_formatTime(start)} to ${_formatTime(end)} · $slotMinutes min per patient';
                 }
 
                 return Container(
@@ -1699,11 +1699,7 @@ class _AppointmentRow extends StatelessWidget {
                           ),
                         ],
                       ApptStatus.checkedIn => [
-                          const Chip(
-                            avatar: Icon(Icons.how_to_reg, size: 16),
-                            label: Text('Arrived'),
-                            visualDensity: VisualDensity.compact,
-                          ),
+                          const _StatusPill(icon: Icons.how_to_reg, label: 'Arrived'),
                           TextButton(onPressed: () => _noShow(context), child: const Text('No-show')),
                           FilledButton.tonalIcon(
                             onPressed: () => _startVisit(context),
@@ -1811,13 +1807,15 @@ class _NowServingBar extends StatelessWidget {
             ),
             const SizedBox(height: 10),
             Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                if (doctorId.isNotEmpty) _AvgConsultChip(doctorId: doctorId, editable: isThisDoctor),
-                const Spacer(),
+                if (doctorId.isNotEmpty)
+                  Flexible(child: _AvgConsultChip(doctorId: doctorId, editable: isThisDoctor)),
+                const SizedBox(width: 8),
                 FilledButton.icon(
                   onPressed: current.isEmpty && next != null ? () => _callNext(context, next) : null,
                   icon: const Icon(Icons.campaign_outlined, size: 18),
-                  label: Text(current.isNotEmpty ? 'Finish current first' : 'Call next'),
+                  label: Text(current.isNotEmpty ? 'In progress' : 'Call next'),
                 ),
               ],
             ),
@@ -1868,11 +1866,12 @@ class _AvgConsultChip extends StatelessWidget {
       builder: (context, snap) {
         final minutes = (snap.data?.data()?['avgConsultMinutes'] as num?)?.toInt() ??
             QueueService.defaultConsultMinutes;
-        return ActionChip(
-          avatar: const Icon(Icons.timer_outlined, size: 16),
-          label: Text('~$minutes min / patient'),
-          onPressed: editable ? () => _edit(context, minutes) : null,
-        );
+        final label = Text('~$minutes min / patient');
+        const icon = Icon(Icons.timer_outlined, size: 16);
+        // Operators see the value; only the doctor gets a tappable chip.
+        return editable
+            ? ActionChip(avatar: icon, label: label, onPressed: () => _edit(context, minutes))
+            : Chip(avatar: icon, label: label, visualDensity: VisualDensity.compact);
       },
     );
   }
@@ -1921,6 +1920,26 @@ class _ConsultTimerState extends State<_ConsultTimer> {
       labelStyle: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
       backgroundColor: color,
       visualDensity: VisualDensity.compact,
+    );
+  }
+}
+
+/// Read-only status label in a queue row (not a button).
+class _StatusPill extends StatelessWidget {
+  const _StatusPill({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 18, color: Colors.green.shade700),
+        const SizedBox(width: 4),
+        Text(label, style: TextStyle(color: Colors.green.shade800, fontWeight: FontWeight.w700)),
+      ],
     );
   }
 }

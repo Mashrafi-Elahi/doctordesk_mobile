@@ -295,6 +295,7 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
                                             queueId: (data['queueId'] ?? '').toString(),
                                             token: pos,
                                             status: status,
+                                            visitDay: ts is Timestamp ? ts.toDate() : null,
                                           ),
                                         if (isProposed)
                                           _ProposalActions(appointmentId: upcoming[i].id),
@@ -1241,16 +1242,35 @@ String _statusLabel(String status) => switch (status) {
 /// "Now serving #9 · 2 ahead of you", from the doctor's day queue. Only token
 /// numbers are read, never other patients' appointments.
 class _LiveQueueLine extends StatelessWidget {
-  const _LiveQueueLine({required this.queueId, required this.token, required this.status});
+  const _LiveQueueLine({
+    required this.queueId,
+    required this.token,
+    required this.status,
+    this.visitDay,
+  });
 
   final String queueId;
   final int token;
   final String status;
+  final DateTime? visitDay;
+
+  bool get _isToday {
+    final d = visitDay;
+    if (d == null) return true;
+    final now = DateTime.now();
+    return d.year == now.year && d.month == now.month && d.day == now.day;
+  }
 
   @override
   Widget build(BuildContext context) {
     if (status == ApptStatus.inConsultation) {
       return const _QueueBanner(text: "It's your turn — please go in.", highlight: true);
+    }
+    // "You're next" the day before is wrong and alarming; the live position
+    // only means something on the visit day.
+    if (!_isToday) {
+      final d = visitDay!;
+      return _QueueBanner(text: 'Live queue opens on ${d.day}/${d.month} · you are token #$token');
     }
     if (queueId.isEmpty) return const SizedBox.shrink();
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(

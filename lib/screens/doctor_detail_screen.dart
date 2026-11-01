@@ -271,7 +271,9 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
     }
 
     String selectedChamberId = chamberOptions.first.id;
-    DateTime selectedDate = DateTime.now().add(const Duration(days: 1));
+    // Today is bookable; slots already past are hidden by getFreeSlots.
+    final now = DateTime.now();
+    DateTime selectedDate = DateTime(now.year, now.month, now.day);
     // Optional preferred slot; the desk sees it when proposing a time.
     DateTime? preferredSlot;
     Future<FreeSlotsResult>? slotsFuture;
@@ -361,17 +363,19 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                               label: Text(
                                   'Preferred Date: ${selectedDate.day}/${selectedDate.month}/${selectedDate.year}'),
                               onPressed: () async {
+                                bool selectable(DateTime d) =>
+                                    schedule == null || schedule.isVisitingDay(d);
+                                // The picker asserts its initial date is selectable.
+                                var initial = selectedDate;
+                                for (var i = 0; i < 14 && !selectable(initial); i++) {
+                                  initial = initial.add(const Duration(days: 1));
+                                }
                                 final picked = await showDatePicker(
                                   context: context,
-                                  initialDate: selectedDate,
+                                  initialDate: initial,
                                   firstDate: DateTime.now(),
                                   lastDate: DateTime.now().add(const Duration(days: 90)),
-                                  selectableDayPredicate: (date) {
-                                    if (schedule != null && !schedule.isVisitingDay(date)) {
-                                      return false;
-                                    }
-                                    return true;
-                                  },
+                                  selectableDayPredicate: selectable,
                                 );
                                 if (picked != null) {
                                   setSheetState(() => selectedDate = picked);
@@ -445,7 +449,7 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                                       Padding(
                                         padding: const EdgeInsets.symmetric(vertical: 4),
                                         child: Text(
-                                          '${res.slotsLeft} slots left for ${selectedDate.day}/${selectedDate.month}',
+                                          'Open on ${selectedDate.day}/${selectedDate.month}',
                                           style: TextStyle(
                                             color: Colors.green.shade800,
                                             fontWeight: FontWeight.w600,
