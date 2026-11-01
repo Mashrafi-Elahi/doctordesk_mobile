@@ -1,14 +1,23 @@
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../models/chat_message.dart';
 import '../services/app_language.dart';
 import '../services/auth_service.dart';
 import '../services/chat_service.dart';
+import '../widgets/user_avatar.dart';
+import '../widgets/state_views.dart';
 import '../widgets/profile_avatar_button.dart';
 import 'chat_screen.dart';
 
-class InboxScreen extends StatelessWidget {
+class InboxScreen extends StatefulWidget {
   const InboxScreen({super.key});
+
+  @override
+  State<InboxScreen> createState() => _InboxScreenState();
+}
+
+class _InboxScreenState extends State<InboxScreen> {
 
   String _formatTime(DateTime dt) {
     final diff = DateTime.now().difference(dt);
@@ -20,8 +29,16 @@ class InboxScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // The shell builds this tab once (const), so follow sign-in/out here.
+    return StreamBuilder<User?>(
+      stream: AuthService.authStateChanges,
+      initialData: AuthService.currentUser,
+      builder: (context, snap) => _buildFor(context, snap.data?.uid),
+    );
+  }
+
+  Widget _buildFor(BuildContext context, String? currentUid) {
     final theme = Theme.of(context);
-    final currentUid = AuthService.currentUser?.uid;
 
     return Scaffold(
       appBar: AppBar(
@@ -46,6 +63,10 @@ class InboxScreen extends StatelessWidget {
           : StreamBuilder<List<ChatSession>>(
               stream: ChatService.streamUserChats(currentUid),
               builder: (context, snapshot) {
+          if (snapshot.hasError) {
+            return ErrorStateView.fromError(snapshot.error,
+                what: 'conversations', onRetry: () => setState(() {}));
+          }
                 if (snapshot.connectionState == ConnectionState.waiting) {
                   return const Center(child: CircularProgressIndicator());
                 }
@@ -101,13 +122,7 @@ class InboxScreen extends StatelessWidget {
 
                     return ListTile(
                       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                      leading: CircleAvatar(
-                        backgroundColor: theme.colorScheme.primaryContainer,
-                        child: Text(
-                          otherName.isNotEmpty ? otherName[0].toUpperCase() : '?',
-                          style: TextStyle(fontWeight: FontWeight.bold, color: theme.colorScheme.onPrimaryContainer),
-                        ),
-                      ),
+                      leading: UserAvatar(uid: otherUid, name: otherName),
                       title: Row(
                         children: [
                           Expanded(

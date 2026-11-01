@@ -5,11 +5,12 @@ import 'package:flutter/material.dart';
 class AppColors {
   AppColors._();
 
-  // Primary palette
-  static const Color primary = Color(0xFF3949AB); // Deep indigo
-  static const Color primaryDark = Color(0xFF2C3A8C);
-  static const Color primaryLight = Color(0xFFC5CAE9);
-  static const Color primaryTint = Color(0xFFE8EAF6); // Nav bg, chip bg, soft fills
+  // Patient palette, for const contexts only. Role-aware widgets must use
+  // Theme.of(context).colorScheme (see RolePalette in app_theme.dart).
+  static const Color primary = Color(0xFF0273B6);
+  static const Color primaryDark = Color(0xFF01579B);
+  static const Color primaryLight = Color(0xFFB3E5FC);
+  static const Color primaryTint = Color(0xFFE1F5FE); // Nav bg, chip bg, soft fills
 
   // Surfaces & Backgrounds
   static const Color background = Color(0xFFF5F6FA);
@@ -19,9 +20,10 @@ class AppColors {
   static const Color textPrimary = Color(0xFF1B1F3B);
   static const Color textSecondary = Color(0xFF6B7280);
   static const Color textTertiary = Color(0xFF9CA3AF);
+  static const Color textNav = Color(0xFF4B5563); // >= 4.5:1 on every role tint
 
   // Border & Outlines
-  static const Color border = Color(0xFF3949AB);
+  static const Color border = Color(0xFF0273B6);
   static const Color borderSubtle = Color(0xFFE5E7EB);
 
   // Status & Accents

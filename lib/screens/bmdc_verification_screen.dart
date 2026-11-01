@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import '../theme/app_constants.dart';
 import '../services/data_service.dart';
 import '../services/verification_provider.dart';
 
@@ -215,7 +216,7 @@ class _BmdcVerificationScreenState extends State<BmdcVerificationScreen> {
                   Expanded(
                     child: FilledButton.icon(
                       style: FilledButton.styleFrom(
-                        backgroundColor: Colors.green,
+                        backgroundColor: AppColors.success,
                         padding: const EdgeInsets.symmetric(vertical: 12),
                       ),
                       icon: const Icon(Icons.verified, size: 18),

@@ -32,6 +32,7 @@ void main() async {
   final prefs = await SharedPreferences.getInstance();
   final bool hasSeenOnboarding = prefs.getBool('hasSeenOnboarding') ?? false;
   final UserRole initialRole = await AuthService.getSavedRole();
+  RoleThemeController.setRole(initialRole);
 
   runApp(MyApp(
     hasSeenOnboarding: hasSeenOnboarding,
@@ -65,10 +66,19 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // App-level theme follows the active role so dialogs, bottom sheets and
+    // pushed screens use the same colours as the shell.
+    return ValueListenableBuilder<UserRole>(
+      valueListenable: RoleThemeController.activeRole,
+      builder: (context, role, _) => _buildApp(AppTheme.themeForRole(role)),
+    );
+  }
+
+  Widget _buildApp(ThemeData theme) {
     return MaterialApp(
       title: 'DocDesk',
       debugShowCheckedModeBanner: false,
-      theme: AppTheme.lightTheme,
+      theme: theme,
       locale: Locale(AppLanguage.code.value),
       supportedLocales: const [Locale('en'), Locale('bn')],
       navigatorObservers: [TtsNavigationObserver()],

@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import '../theme/app_constants.dart';
 import '../services/api_service.dart';
 import '../services/auth_service.dart';
 import '../services/data_service.dart';
@@ -39,7 +40,7 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.error),
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('Delete'),
           ),
@@ -69,8 +70,6 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
   bool _loading = false;
   String _serverStatus = 'Checking...';
   int? _latencyMs;
-  int? _doctorCount;
-  int? _appointmentCount;
   String? _lastActionMessage;
   List<Map<String, dynamic>> _doctorApplications = [];
   List<Map<String, dynamic>> _moderators = [];
@@ -450,7 +449,7 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                     padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
                       color: Colors.green.shade50,
-                      borderRadius: BorderRadius.circular(6),
+                      borderRadius: BorderRadius.circular(8),
                       border: Border.all(color: Colors.green.shade200),
                     ),
                     child: Row(
@@ -646,16 +645,12 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
       await ApiService.fetchSpecialities();
       stopwatch.stop();
 
-      final qData = await ApiService.fetchTodayQueue('demo-chamber');
-      final dRes = await ApiService.fetchDoctors(limit: 1);
 
       if (mounted) {
         setState(() {
           _loading = false;
           _serverStatus = 'Online (Cloud Firestore)';
           _latencyMs = stopwatch.elapsedMilliseconds;
-          _appointmentCount = qData.length;
-          _doctorCount = dRes['total'] ?? 0;
         });
       }
     } catch (e) {
@@ -683,7 +678,7 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
               onPressed: () => Navigator.pop(ctx, false),
               child: const Text('Cancel')),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.error),
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('Delete All'),
           ),
@@ -771,7 +766,7 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.error),
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('Reject'),
           ),
@@ -817,10 +812,9 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
       appBar: AppBar(
         title: const Row(
           children: [
-            Icon(Icons.terminal, color: Colors.blueAccent),
+            Icon(Icons.admin_panel_settings_outlined),
             SizedBox(width: 8),
-            Text('Admin Console',
-                style: TextStyle(fontWeight: FontWeight.bold)),
+            Text('Admin Console'),
           ],
         ),
         actions: [
@@ -836,95 +830,55 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            // Active Firebase backend status card.
-            Card(
-              color: const Color(0xFF1E293B),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16)),
-              child: Padding(
+            // Live backend status: connection plus the numbers an admin acts on.
+            Builder(builder: (context) {
+              final colors = Theme.of(context).colorScheme;
+              final online = _serverStatus.contains('Online');
+              return Container(
                 padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: AppColors.surface,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: AppColors.borderSubtle),
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Row(
                       children: [
                         Container(
-                          padding: const EdgeInsets.all(8),
+                          width: 8,
+                          height: 8,
                           decoration: BoxDecoration(
-                            color: Colors.green.withValues(alpha: 0.2),
+                            color: online ? AppColors.success : AppColors.error,
                             shape: BoxShape.circle,
                           ),
-                          child: const Icon(Icons.dns,
-                              color: Colors.greenAccent, size: 22),
                         ),
-                        const SizedBox(width: 12),
-                        const Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'DoctorDesk Firebase',
-                                style: TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 16),
-                              ),
-                              Text(
-                                'Cloud Firestore shared backend',
-                                style:
-                                    TextStyle(color: Colors.grey, fontSize: 11),
-                              ),
-                            ],
-                          ),
-                        ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: _serverStatus.contains('Online')
-                                ? Colors.green
-                                : Colors.red,
-                            borderRadius: BorderRadius.circular(12),
-                          ),
+                        const SizedBox(width: 8),
+                        Expanded(
                           child: Text(
-                            _serverStatus.contains('Online')
-                                ? 'ONLINE'
-                                : 'ERROR',
-                            style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 10,
-                                fontWeight: FontWeight.bold),
+                            online ? 'Live · Cloud Firestore' : 'Backend unreachable',
+                            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
                           ),
+                        ),
+                        Text(
+                          _latencyMs != null ? '$_latencyMs ms' : '—',
+                          style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 16),
-                    const Divider(color: Colors.white12),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 14),
                     Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        _metric('Firestore', 'Connected', Colors.greenAccent),
-                        _metric(
-                            'Latency',
-                            _latencyMs != null ? '$_latencyMs ms' : '--',
-                            Colors.amberAccent),
-                        _metric(
-                            'Doctors',
-                            _doctorCount != null ? '$_doctorCount' : '--',
-                            Colors.cyanAccent),
-                        _metric(
-                            'Queue',
-                            _appointmentCount != null
-                                ? '$_appointmentCount'
-                                : '--',
-                            Colors.purpleAccent),
+                        _metric('Pending applications', '${_doctorApplications.length}', colors.primary),
+                        const SizedBox(width: 10),
+                        _metric('Moderators', '${_moderators.length}', colors.primary),
                       ],
                     ),
                   ],
                 ),
-              ),
-            ),
+              );
+            }),
             const SizedBox(height: 16),
 
             if (_lastActionMessage != null) ...[
@@ -932,7 +886,7 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
                   color: Colors.blue.shade50,
-                  borderRadius: BorderRadius.circular(10),
+                  borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: Colors.blue.shade200),
                 ),
                 child: Row(
@@ -1015,7 +969,7 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                           padding: const EdgeInsets.all(12),
                           decoration: BoxDecoration(
                             color: Colors.blue.shade50.withValues(alpha: 0.5),
-                            borderRadius: BorderRadius.circular(10),
+                            borderRadius: BorderRadius.circular(12),
                             border: Border.all(color: Colors.blue.shade100),
                           ),
                           child: Column(
@@ -1035,7 +989,7 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                                           horizontal: 6, vertical: 2),
                                       decoration: BoxDecoration(
                                         color: Colors.green.shade100,
-                                        borderRadius: BorderRadius.circular(6),
+                                        borderRadius: BorderRadius.circular(8),
                                       ),
                                       child: Row(
                                         mainAxisSize: MainAxisSize.min,
@@ -1086,7 +1040,7 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                                 children: [
                                   FilledButton(
                                     style: FilledButton.styleFrom(
-                                        backgroundColor: Colors.green),
+                                        backgroundColor: AppColors.success),
                                     onPressed: _loading
                                         ? null
                                         : () => _approveDoctorApplication(uid),
@@ -1204,7 +1158,7 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                                   ),
                                 ),
                                 selected: _verificationFilter == status,
-                                selectedColor: Colors.blue.shade700,
+                                selectedColor: Theme.of(context).colorScheme.primary,
                                 onSelected: (sel) {
                                   if (sel) {
                                     setState(() => _verificationFilter = status);
@@ -1273,7 +1227,7 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                           padding: const EdgeInsets.all(12),
                           decoration: BoxDecoration(
                             color: Colors.grey.shade50,
-                            borderRadius: BorderRadius.circular(10),
+                            borderRadius: BorderRadius.circular(12),
                             border: Border.all(color: Colors.grey.shade200),
                           ),
                           child: Column(
@@ -1370,21 +1324,31 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                                       child: const Text('Restore to Discovery', style: TextStyle(fontSize: 11)),
                                     ),
                                   ] else ...[
-                                    OutlinedButton.icon(
-                                      style: OutlinedButton.styleFrom(
-                                        foregroundColor: Colors.orange.shade900,
-                                        visualDensity: VisualDensity.compact,
-                                      ),
-                                      icon: const Icon(Icons.visibility_off_outlined, size: 13),
-                                      label: const Text('Hide', style: TextStyle(fontSize: 11)),
-                                      onPressed: _loading ? null : () => _showSoftHideDialog(docId, name),
-                                    ),
-                                    const SizedBox(width: 6),
-                                    IconButton(
-                                      icon: const Icon(Icons.delete_forever, size: 18, color: Colors.red),
-                                      tooltip: 'Hard Delete Doctor',
-                                      visualDensity: VisualDensity.compact,
-                                      onPressed: _loading ? null : () => _showHardDeleteDialog(docId, name),
+                                    // Destructive actions live behind a menu so they
+                                    // can't be hit by accident.
+                                    PopupMenuButton<String>(
+                                      tooltip: 'More actions',
+                                      enabled: !_loading,
+                                      onSelected: (v) => v == 'hide'
+                                          ? _showSoftHideDialog(docId, name)
+                                          : _showHardDeleteDialog(docId, name),
+                                      itemBuilder: (_) => const [
+                                        PopupMenuItem(
+                                          value: 'hide',
+                                          child: ListTile(
+                                            leading: Icon(Icons.visibility_off_outlined),
+                                            title: Text('Hide from discovery'),
+                                          ),
+                                        ),
+                                        PopupMenuItem(
+                                          value: 'delete',
+                                          child: ListTile(
+                                            leading: Icon(Icons.delete_forever, color: AppColors.error),
+                                            title: Text('Delete permanently',
+                                                style: TextStyle(color: AppColors.error)),
+                                          ),
+                                        ),
+                                      ],
                                     ),
                                   ],
                                 ],
@@ -1492,7 +1456,7 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                               padding: const EdgeInsets.all(12),
                               decoration: BoxDecoration(
                                 color: Colors.deepPurple.shade50.withValues(alpha: 0.4),
-                                borderRadius: BorderRadius.circular(10),
+                                borderRadius: BorderRadius.circular(12),
                                 border: Border.all(color: Colors.deepPurple.shade100),
                               ),
                               child: Column(
@@ -1568,7 +1532,7 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                                         const SizedBox(width: 8),
                                         FilledButton(
                                           style: FilledButton.styleFrom(
-                                            backgroundColor: Colors.green,
+                                            backgroundColor: AppColors.success,
                                             visualDensity: VisualDensity.compact,
                                           ),
                                           onPressed: _loading ? null : () => _approveClaim(claim),
@@ -2012,14 +1976,25 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
   }
 
   Widget _metric(String label, String value, Color color) {
-    return Column(
-      children: [
-        Text(value,
-            style: TextStyle(
-                color: color, fontWeight: FontWeight.bold, fontSize: 14)),
-        const SizedBox(height: 2),
-        Text(label, style: const TextStyle(color: Colors.grey, fontSize: 10)),
-      ],
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.07),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(value,
+                style: TextStyle(
+                    color: color, fontWeight: FontWeight.w700, fontSize: 20)),
+            const SizedBox(height: 2),
+            Text(label,
+                style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+          ],
+        ),
+      ),
     );
   }
 

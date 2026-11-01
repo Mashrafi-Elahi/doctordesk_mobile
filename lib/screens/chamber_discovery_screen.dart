@@ -86,7 +86,7 @@ class _ChamberDiscoveryScreenState extends State<ChamberDiscoveryScreen> {
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
             title: Row(
               children: [
-                const Icon(Icons.badge_outlined, color: AppColors.primary),
+                Icon(Icons.badge_outlined, color: Theme.of(context).colorScheme.primary),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
@@ -104,8 +104,8 @@ class _ChamberDiscoveryScreenState extends State<ChamberDiscoveryScreen> {
                   Container(
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: AppColors.primaryTint,
-                      borderRadius: BorderRadius.circular(10),
+                      color: Theme.of(context).colorScheme.primaryContainer,
+                      borderRadius: BorderRadius.circular(12),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -247,7 +247,7 @@ class _ChamberDiscoveryScreenState extends State<ChamberDiscoveryScreen> {
                     fillColor: AppColors.background,
                     filled: true,
                     border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(10),
+                      borderRadius: BorderRadius.circular(12),
                       borderSide: const BorderSide(color: AppColors.borderSubtle),
                     ),
                   ),
@@ -268,7 +268,7 @@ class _ChamberDiscoveryScreenState extends State<ChamberDiscoveryScreen> {
                             setState(() => _selectedArea = area);
                             _loadChambers();
                           },
-                          selectedColor: AppColors.primary,
+                          selectedColor: Theme.of(context).colorScheme.primary,
                           labelStyle: TextStyle(
                             color: isSelected ? Colors.white : AppColors.textPrimary,
                             fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
@@ -335,11 +335,11 @@ class _ChamberDiscoveryScreenState extends State<ChamberDiscoveryScreen> {
                                       Container(
                                         padding: const EdgeInsets.all(10),
                                         decoration: BoxDecoration(
-                                          color: AppColors.primaryTint,
-                                          borderRadius: BorderRadius.circular(10),
+                                          color: Theme.of(context).colorScheme.primaryContainer,
+                                          borderRadius: BorderRadius.circular(12),
                                         ),
-                                        child: const Icon(Icons.local_hospital_outlined,
-                                            color: AppColors.primary, size: 24),
+                                        child: Icon(Icons.local_hospital_outlined,
+                                            color: Theme.of(context).colorScheme.primary, size: 24),
                                       ),
                                       const SizedBox(width: 12),
                                       Expanded(
@@ -421,7 +421,7 @@ class _ChamberDiscoveryScreenState extends State<ChamberDiscoveryScreen> {
                                           color: hasOperator
                                               ? Colors.grey.shade100
                                               : Colors.green.shade50,
-                                          borderRadius: BorderRadius.circular(6),
+                                          borderRadius: BorderRadius.circular(8),
                                           border: Border.all(
                                             color: hasOperator
                                                 ? Colors.grey.shade300

@@ -3,11 +3,13 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../theme/app_constants.dart';
 import '../services/api_service.dart';
 import '../services/data_service.dart';
 import '../services/auth_service.dart';
 import '../services/app_language.dart';
 import '../services/chamber_resolver.dart';
+import '../widgets/state_views.dart';
 import '../widgets/profile_avatar_button.dart';
 import 'doctors_screen.dart';
 
@@ -20,6 +22,8 @@ class AppointmentScreen extends StatefulWidget {
   @override
   State<AppointmentScreen> createState() => _AppointmentScreenState();
 }
+
+const _pastStatuses = {'done', 'completed'};
 
 class _AppointmentScreenState extends State<AppointmentScreen> {
   @override
@@ -41,14 +45,14 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
               margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
               decoration: BoxDecoration(
                 color: Colors.white.withValues(alpha: 0.18),
-                borderRadius: BorderRadius.circular(22),
+                borderRadius: BorderRadius.circular(24),
               ),
               child: TabBar(
                 isScrollable: false,
                 indicatorSize: TabBarIndicatorSize.tab,
                 indicator: BoxDecoration(
                   color: Colors.white,
-                  borderRadius: BorderRadius.circular(22),
+                  borderRadius: BorderRadius.circular(24),
                 ),
                 labelColor: theme.colorScheme.primary,
                 labelStyle: GoogleFonts.poppins(
@@ -106,17 +110,29 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
                     .where('userId', isEqualTo: currentUid)
                     .snapshots(),
                 builder: (context, snapshot) {
+                  if (snapshot.hasError) {
+                    return ErrorStateView.fromError(snapshot.error,
+                        what: 'your appointments',
+                        onRetry: () => setState(() {}));
+                  }
+                  if (!snapshot.hasData) {
+                    return const LoadingView(message: 'Loading appointments…');
+                  }
                   final docs = snapshot.data?.docs ?? [];
                   final upcoming = docs.where((d) {
                     final status =
                         d.data()['status']?.toString().toLowerCase() ?? '';
-                    return status != 'completed' && status != 'cancelled';
+                    // 'done' is the terminal status the desk sets; 'completed' is legacy.
+                    return !_pastStatuses.contains(status) &&
+                        status != 'cancelled' &&
+                        status != 'rejected' &&
+                        status != 'no_show';
                   }).toList();
 
                   final past = docs.where((d) {
                     final status =
                         d.data()['status']?.toString().toLowerCase() ?? '';
-                    return status == 'completed';
+                    return _pastStatuses.contains(status);
                   }).toList();
 
                   return TabBarView(
@@ -130,7 +146,7 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
                             )
                           : ListView.builder(
                               padding:
-                                  const EdgeInsets.fromLTRB(16, 16, 16, 88),
+                                  const EdgeInsets.fromLTRB(16, 16, 16, 160),
                               itemCount: upcoming.length,
                               itemBuilder: (ctx, i) {
                                 final data = upcoming[i].data();
@@ -231,7 +247,9 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
                                               child: Text(
                                                 status == 'requested'
                                                     ? 'AWAITING CONFIRMATION'
-                                                    : status.toUpperCase(),
+                                                    : status
+                                                        .replaceAll('_', ' ')
+                                                        .toUpperCase(),
                                                 style: TextStyle(
                                                   color: status == 'requested'
                                                       ? Colors.amber.shade900
@@ -296,7 +314,7 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
                                                       actions: [
                                                         TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('No')),
                                                         FilledButton(
-                                                          style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                                                          style: FilledButton.styleFrom(backgroundColor: AppColors.error),
                                                           onPressed: () => Navigator.pop(c, true),
                                                           child: const Text('Cancel Appointment'),
                                                         ),
@@ -326,7 +344,7 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
                             )
                           : ListView.builder(
                               padding:
-                                  const EdgeInsets.fromLTRB(16, 16, 16, 88),
+                                  const EdgeInsets.fromLTRB(16, 16, 16, 160),
                               itemCount: past.length,
                               itemBuilder: (ctx, i) {
                                 final data = past[i].data();
@@ -358,7 +376,7 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
               );
           },
         ),
-        floatingActionButton: FloatingActionButton(
+        floatingActionButton: FloatingActionButton.extended(
           heroTag: null,
           onPressed: () {
             Navigator.push(
@@ -367,7 +385,8 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
             );
           },
           tooltip: 'Browse Doctors & Book',
-          child: const Icon(Icons.add),
+          icon: const Icon(Icons.search),
+          label: const Text('Book a doctor'),
         ),
       ),
     );
@@ -649,7 +668,7 @@ class _HealthCalendarTabState extends State<_HealthCalendarTab> {
                         }
 
                         return InkWell(
-                          borderRadius: BorderRadius.circular(10),
+                          borderRadius: BorderRadius.circular(12),
                           onTap: () {
                             setState(() {
                               _selectedDay = cellDate;
@@ -658,7 +677,7 @@ class _HealthCalendarTabState extends State<_HealthCalendarTab> {
                           child: Container(
                             decoration: BoxDecoration(
                               color: bgColor,
-                              borderRadius: BorderRadius.circular(10),
+                              borderRadius: BorderRadius.circular(12),
                               border: borderColor != null
                                   ? Border.all(
                                       color: borderColor,
@@ -737,7 +756,7 @@ class _HealthCalendarTabState extends State<_HealthCalendarTab> {
                             decoration: BoxDecoration(
                               color: colorScheme.primaryContainer
                                   .withValues(alpha: 0.4),
-                              borderRadius: BorderRadius.circular(6),
+                              borderRadius: BorderRadius.circular(8),
                             ),
                             child: Text(
                               'Today',
@@ -866,7 +885,7 @@ class _HealthCalendarTabState extends State<_HealthCalendarTab> {
                                 style: FilledButton.styleFrom(
                                   backgroundColor: const Color(0xFF5E35B1),
                                   shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(10),
+                                    borderRadius: BorderRadius.circular(12),
                                   ),
                                 ),
                               ),
@@ -925,7 +944,7 @@ class _HealthCalendarTabState extends State<_HealthCalendarTab> {
                                 style: FilledButton.styleFrom(
                                   backgroundColor: const Color(0xFFC62828),
                                   shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(10),
+                                    borderRadius: BorderRadius.circular(12),
                                   ),
                                 ),
                               ),
@@ -1049,7 +1068,7 @@ class _HealthCalendarTabState extends State<_HealthCalendarTab> {
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
         color: bgColor,
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(12),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1085,13 +1104,13 @@ class _HealthCalendarTabState extends State<_HealthCalendarTab> {
   ) {
     final isSelected = currentFeeling == key;
     return InkWell(
-      borderRadius: BorderRadius.circular(10),
+      borderRadius: BorderRadius.circular(12),
       onTap: () => _onLogCalendarMood(key, dateKey),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
           color: isSelected ? const Color(0xFFE3F2FD) : Colors.transparent,
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(12),
           border: Border.all(
             color: isSelected ? const Color(0xFF1E88E5) : Colors.grey.shade300,
             width: isSelected ? 1.5 : 1,
@@ -1190,31 +1209,6 @@ class _EmptyState extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, size: 56, color: Colors.grey[350]),
-            const SizedBox(height: 16),
-            Text(
-              title,
-              style: const TextStyle(
-                fontWeight: FontWeight.w600,
-                fontSize: 16,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              subtitle,
-              textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.grey[600], fontSize: 14),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+  Widget build(BuildContext context) =>
+      EmptyStateView(icon: icon, title: title, message: subtitle);
 }

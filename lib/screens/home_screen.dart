@@ -1,3 +1,4 @@
+import '../widgets/user_avatar.dart';
 import '../models/user_role.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -71,15 +72,6 @@ class _HomeScreenState extends State<HomeScreen> {
     return firstName.isNotEmpty ? firstName : '';
   }
 
-  String get _avatarInitials {
-    final name = AuthService.currentUser?.displayName?.trim() ?? '';
-    if (name.isEmpty) return 'U';
-    final parts = name.split(' ').where((p) => p.isNotEmpty).toList();
-    if (parts.length >= 2) {
-      return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
-    }
-    return parts[0][0].toUpperCase();
-  }
 
   List<Doctor> get _displayedDoctors {
     final query = _searchController.text.trim().toLowerCase();
@@ -449,27 +441,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                   ),
                                 );
                               },
-                              child: SizedBox(
-                                width: 44,
-                                height: 44,
-                                child: CircleAvatar(
-                                  radius: 22,
-                                  backgroundColor: AppColors.primaryLight,
-                                  backgroundImage: AuthService.currentUser?.photoURL != null
-                                      ? NetworkImage(AuthService.currentUser!.photoURL!)
-                                      : null,
-                                  child: AuthService.currentUser?.photoURL == null
-                                      ? Text(
-                                          _avatarInitials,
-                                          style: GoogleFonts.poppins(
-                                            fontSize: 16,
-                                            fontWeight: FontWeight.w600,
-                                            color: AppColors.primary,
-                                          ),
-                                        )
-                                      : null,
-                                ),
-                              ),
+                              child: const UserAvatar.me(radius: 22, ring: true),
                             ),
                             const SizedBox(width: 12),
                             Expanded(
@@ -579,12 +551,12 @@ class _HomeScreenState extends State<HomeScreen> {
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
                                   IconButton(
-                                    icon: const Icon(Icons.auto_awesome, color: AppColors.primary, size: 20),
+                                    icon: Icon(Icons.auto_awesome, color: Theme.of(context).colorScheme.primary, size: 20),
                                     tooltip: 'Ask AI Assistant',
                                     onPressed: _openHealthAssistant,
                                   ),
                                   IconButton(
-                                    icon: const Icon(Icons.search, color: AppColors.primary),
+                                    icon: Icon(Icons.search, color: Theme.of(context).colorScheme.primary),
                                     onPressed: () => _submitSearch(_searchController.text),
                                   ),
                                 ],
@@ -756,7 +728,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               style: GoogleFonts.poppins(
                                 fontSize: 14,
                                 fontWeight: FontWeight.w600,
-                                color: AppColors.primary,
+                                color: Theme.of(context).colorScheme.primary,
                               ),
                             ),
                           ),
@@ -786,7 +758,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 style: GoogleFonts.poppins(
                                   fontSize: 12,
                                   fontWeight: FontWeight.w500,
-                                  color: AppColors.primary,
+                                  color: Theme.of(context).colorScheme.primary,
                                 ),
                               ),
                             ],
@@ -805,7 +777,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               style: GoogleFonts.poppins(
                                 fontSize: 14,
                                 fontWeight: FontWeight.w600,
-                                color: AppColors.primary,
+                                color: Theme.of(context).colorScheme.primary,
                               ),
                             ),
                           ),
@@ -845,6 +817,17 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  /// Display label for a category tile: "MEDICINE SPECIALISTS" -> "Medicine
+  /// Specialists" (wraps to two lines instead of truncating).
+  static String _categoryLabel(String raw) {
+    if (raw.toUpperCase().contains('(ENT)')) return 'ENT Specialists';
+    return raw
+        .toLowerCase()
+        .split(' ')
+        .map((w) => w.isEmpty ? w : '${w[0].toUpperCase()}${w.substring(1)}')
+        .join(' ');
+  }
+
   Widget _buildCategoriesGrid() {
     final List<String> rawSpecs = _specialities
         .map((s) => (s['speciality'] ?? '').toString())
@@ -859,6 +842,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return GridView.builder(
       shrinkWrap: true,
+      // Without this the grid inherits the status-bar inset as top padding.
+      padding: EdgeInsets.zero,
       physics: const NeverScrollableScrollPhysics(),
       itemCount: categories.length,
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
@@ -895,18 +880,19 @@ class _HomeScreenState extends State<HomeScreen> {
                     Icon(
                       _getSpecialtyIcon(cat),
                       size: 32,
-                      color: AppColors.primary,
+                      color: Theme.of(context).colorScheme.primary,
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      cat,
+                      _categoryLabel(cat),
                       style: GoogleFonts.poppins(
                         fontSize: 12,
                         fontWeight: FontWeight.w500,
+                        height: 1.2,
                         color: AppColors.textPrimary,
                       ),
                       textAlign: TextAlign.center,
-                      maxLines: 1,
+                      maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
                   ],
@@ -940,7 +926,10 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(12),
-        child: Column(
+        // Transparent Material so ListTile ink shows above the white card.
+        child: Material(
+          color: Colors.transparent,
+          child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -1124,6 +1113,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
             ],
           ],
+          ),
         ),
       ),
     );
@@ -1552,7 +1542,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       style: OutlinedButton.styleFrom(
                         padding: const EdgeInsets.symmetric(vertical: 12),
                         shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(10)),
+                            borderRadius: BorderRadius.circular(12)),
                       ),
                       child: const Text('Not now'),
                     ),
@@ -1576,7 +1566,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         backgroundColor: const Color(0xFF5E35B1),
                         padding: const EdgeInsets.symmetric(vertical: 12),
                         shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(10)),
+                            borderRadius: BorderRadius.circular(12)),
                       ),
                     ),
                   ),
@@ -1647,7 +1637,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       style: OutlinedButton.styleFrom(
                         padding: const EdgeInsets.symmetric(vertical: 12),
                         shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(10)),
+                            borderRadius: BorderRadius.circular(12)),
                       ),
                       child: const Text('Not now'),
                     ),
@@ -1672,7 +1662,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         backgroundColor: const Color(0xFF3B6FA0),
                         padding: const EdgeInsets.symmetric(vertical: 12),
                         shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(10)),
+                            borderRadius: BorderRadius.circular(12)),
                       ),
                     ),
                   ),
@@ -1692,20 +1682,9 @@ class _DoctorListCard extends StatelessWidget {
 
   const _DoctorListCard({required this.doctor, this.isPinnedOwn = false});
 
-  String _getInitials(String name) {
-    final clean = name.replaceAll(RegExp(r'^(Dr\.?|Prof\.?)\s+', caseSensitive: false), '').trim();
-    if (clean.isEmpty) return 'DR';
-    final parts = clean.split(' ').where((s) => s.isNotEmpty).toList();
-    if (parts.length >= 2) {
-      return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
-    }
-    return parts[0][0].toUpperCase();
-  }
 
   @override
   Widget build(BuildContext context) {
-    final String? photoUrl = doctor.certificateImageUrl;
-    final bool hasPhoto = photoUrl != null && photoUrl.trim().isNotEmpty;
     final spec = doctor.specialities.isNotEmpty ? doctor.specialities.first : 'Specialist';
     final hospital = doctor.chamber?.hospitalName;
     final specHospital = (hospital != null && hospital.trim().isNotEmpty)
@@ -1716,7 +1695,7 @@ class _DoctorListCard extends StatelessWidget {
     final ratingValue = doctor.bayesianRating?.toStringAsFixed(1) ?? 'N/A';
     final ratingText = hasReviews
         ? '$ratingValue (${doctor.ratingCount} Reviews)'
-        : 'N/A';
+        : 'No reviews yet';
 
     return Container(
       margin: const EdgeInsets.only(bottom: AppConstants.cardGap),
@@ -1747,24 +1726,12 @@ class _DoctorListCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 // Left circular avatar 56
-                SizedBox(
-                  width: 56,
-                  height: 56,
-                  child: CircleAvatar(
-                    radius: 28,
-                    backgroundColor: AppColors.primaryLight,
-                    backgroundImage: hasPhoto ? NetworkImage(photoUrl) : null,
-                    child: !hasPhoto
-                        ? Text(
-                            _getInitials(doctor.name),
-                            style: GoogleFonts.poppins(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.primary,
-                            ),
-                          )
-                        : null,
-                  ),
+                // Claimed doctors show their account photo; never the
+                // BMDC certificate upload.
+                UserAvatar(
+                  uid: doctor.claimedByUid,
+                  name: doctor.name,
+                  radius: 28,
                 ),
                 const SizedBox(width: 14),
                 // Details column
@@ -1790,7 +1757,7 @@ class _DoctorListCard extends StatelessWidget {
                               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                               decoration: BoxDecoration(
                                 color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.15),
-                                borderRadius: BorderRadius.circular(6),
+                                borderRadius: BorderRadius.circular(8),
                               ),
                               child: Text(
                                 'Your profile',
@@ -1802,12 +1769,12 @@ class _DoctorListCard extends StatelessWidget {
                               ),
                             ),
                             const SizedBox(width: 4),
-                            const Row(
+                            Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                Icon(Icons.check_circle, size: 12, color: AppColors.primary),
-                                SizedBox(width: 2),
-                                Text(
+                                Icon(Icons.check_circle, size: 12, color: Theme.of(context).colorScheme.primary),
+                                const SizedBox(width: 2),
+                                const Text(
                                   'Claimed',
                                   style: TextStyle(
                                     fontSize: 10,
@@ -1823,15 +1790,15 @@ class _DoctorListCard extends StatelessWidget {
                               padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
                               decoration: BoxDecoration(
                                 color: Colors.grey.shade100,
-                                borderRadius: BorderRadius.circular(6),
+                                borderRadius: BorderRadius.circular(8),
                                 border: Border.all(color: Colors.grey.shade300),
                               ),
-                              child: const Row(
+                              child: Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  Icon(Icons.check, size: 10, color: AppColors.primary),
-                                  SizedBox(width: 2),
-                                  Text(
+                                  Icon(Icons.check, size: 10, color: Theme.of(context).colorScheme.primary),
+                                  const SizedBox(width: 2),
+                                  const Text(
                                     'Claimed',
                                     style: TextStyle(
                                       fontSize: 9.5,
@@ -1845,7 +1812,7 @@ class _DoctorListCard extends StatelessWidget {
                           ],
                           if (doctor.verificationStatus == 'checked_found' || doctor.verificationStatus == 'verified') ...[
                             const SizedBox(width: 4),
-                            const Icon(Icons.verified, color: AppColors.primary, size: 16),
+                            Icon(Icons.verified, color: Theme.of(context).colorScheme.primary, size: 16),
                           ],
                         ],
                       ),

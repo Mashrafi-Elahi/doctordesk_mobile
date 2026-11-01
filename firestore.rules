@@ -65,11 +65,20 @@ service cloud.firestore {
     // Doctor can update another user only to assign/remove operator for their own chamber.
     match /users/{uid} {
       allow read: if isAuthenticated();
+      // A new account may not link itself to a doctor profile or chamber on
+      // create; those are granted later by an admin or the owning doctor.
       allow create: if isOwner(uid) &&
         (!('roles' in request.resource.data) ||
          (request.resource.data.roles.isAdmin != true &&
           request.resource.data.roles.isDoctor != true &&
-          request.resource.data.roles.isOperator != true));
+          request.resource.data.roles.isOperator != true &&
+          request.resource.data.roles.get('isModerator', false) != true)) &&
+        (!('doctorProfileId' in request.resource.data) ||
+         request.resource.data.doctorProfileId == null) &&
+        (!('operatorAssignments' in request.resource.data) ||
+         request.resource.data.operatorAssignments.size() == 0) &&
+        (!('assignedChambers' in request.resource.data) ||
+         request.resource.data.assignedChambers.size() == 0);
       allow update: if isAdmin() || (
         isOwner(uid) &&
         !request.resource.data.diff(resource.data).affectedKeys().hasAny(['roles', 'doctorProfileId', 'operatorAssignments'])
@@ -423,13 +432,30 @@ service cloud.firestore {
         resource.data.patientUid == request.auth.uid ||
         resource.data.doctorUid == request.auth.uid
       );
-      allow create: if isAuthenticated() && (
-        isAdmin() ||
-        isDoctor() ||
-        (hasRolesMap() && getUserData().roles.isOperator == true)
-      );
+      // Who may open or re-open a chat: an admin, the chat's own doctor, or an
+      // operator assigned to the chamber of the visit. Follow-up chats carry the
+      // chamber as unlockChamberId; the chats created on Accept carry chamberId.
+      function chatChamber(data) {
+        return data.get('unlockChamberId', data.get('chamberId', null));
+      }
+      function canUnlockChat(data) {
+        return isAdmin() ||
+          (isDoctor() && data.doctorUid == request.auth.uid) ||
+          (hasRolesMap() && getUserData().roles.isOperator == true &&
+           chatChamber(data) != null &&
+           isAssignedOperatorFor(chatChamber(data), data.get('doctorId', null)));
+      }
+
+      allow create: if isAuthenticated() && canUnlockChat(request.resource.data);
       allow update: if isAuthenticated() && (
         isAdmin() ||
+        // Re-open after a later visit: only the expiry, limits, counters and
+        // display fields may change; participants and doctor stay fixed.
+        (canUnlockChat(request.resource.data) &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+           'status', 'expiresAt', 'messageLimit', 'messageCount', 'unlockedBy',
+           'unlockChamberId', 'unlockedAt', 'lastMessage', 'updatedAt',
+           'participantNames', 'patientName', 'doctorName'])) ||
         ((isDoctor() || (hasRolesMap() && getUserData().roles.isOperator == true)) &&
          (request.auth.uid in resource.data.participants || resource.data.doctorUid == request.auth.uid) &&
          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt', 'lastMessage', 'messageCount'])) ||

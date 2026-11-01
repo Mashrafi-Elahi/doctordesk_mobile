@@ -2193,14 +2193,21 @@ class FirestoreService {
   }
 
   /// Live stream of today's waiting count for a chamber (single source of truth).
-  static Stream<int> streamTodayWaitingCount(String chamberId) {
+  static Stream<int> streamTodayWaitingCount(String chamberId, {String? doctorId}) {
     final now = DateTime.now();
     final startOfDay = DateTime(now.year, now.month, now.day, 0, 0, 0);
     final endOfDay = DateTime(now.year, now.month, now.day, 23, 59, 59, 999);
 
-    return _db
-        .collection('appointments')
-        .where('chamberId', isEqualTo: chamberId)
+    Query<Map<String, dynamic>> query =
+        _db.collection('appointments').where('chamberId', isEqualTo: chamberId);
+    if (doctorId != null && doctorId.isNotEmpty) {
+      // Doctors may only read their own appointments; this filter lets the
+      // rules allow the query (uses the chamber+doctor+status+time index).
+      query = query
+          .where('doctorId', isEqualTo: doctorId)
+          .where('status', whereIn: ['requested', 'confirmed', 'in_progress']);
+    }
+    return query
         .where('scheduledTime', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
         .where('scheduledTime', isLessThanOrEqualTo: Timestamp.fromDate(endOfDay))
         .snapshots()
@@ -3098,6 +3105,9 @@ class FirestoreService {
 
       if (chamberIds != null && chamberIds.isNotEmpty) {
         query = query.where('chamberId', whereIn: chamberIds);
+        if (doctorId != null && doctorId.trim().isNotEmpty) {
+          query = query.where('doctorId', isEqualTo: doctorId.trim());
+        }
       } else if (effectiveDoctorId != null && effectiveDoctorId.isNotEmpty) {
         query = query.where('doctorId', isEqualTo: effectiveDoctorId);
       }
@@ -3378,10 +3388,21 @@ class FirestoreService {
     } catch (_) {}
   }
 
-  static Future<void> markAppointmentCompletedAndUnlockChat(String appointmentId) async {
+  /// Desk calls the patient in: confirmed -> in_progress. The visit stays in
+  /// the queue view until it is marked done.
+  static Future<void> markAppointmentInProgress(String appointmentId) async {
+    await _db.collection('appointments').doc(appointmentId).update({
+      'status': 'in_progress',
+      'startedAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  /// Returns true when a follow-up chat was unlocked for the patient.
+  static Future<bool> markAppointmentCompletedAndUnlockChat(String appointmentId) async {
     final apptRef = _db.collection('appointments').doc(appointmentId);
     final apptSnap = await apptRef.get();
-    if (!apptSnap.exists) return;
+    if (!apptSnap.exists) return false;
 
     final apptData = apptSnap.data() ?? {};
     final patientUid = (apptData['userId'] ?? '').toString();
@@ -3414,20 +3435,20 @@ class FirestoreService {
       } catch (_) {}
     }
 
-    if (doctorId.isEmpty || patientUid.isEmpty) return;
+    if (doctorId.isEmpty || patientUid.isEmpty) return false;
 
     // 2. Fetch doctor profile to check claimedByUid & messagingMode
     try {
       final docSnap = await _db.collection('doctors').doc(doctorId).get();
-      if (!docSnap.exists) return;
+      if (!docSnap.exists) return false;
 
       final docData = docSnap.data() ?? {};
       final doctorUid = (docData['claimedByUid'] ?? '').toString();
-      if (doctorUid.isEmpty) return;
+      if (doctorUid.isEmpty) return false;
 
       final messagingMode = (docData['messagingMode'] ?? 'followup').toString();
       if (messagingMode == 'off' || messagingMode == 'paid') {
-        return;
+        return false;
       }
 
       final followupDays = (docData['followupDays'] as num?)?.toInt() ?? 7;
@@ -3440,11 +3461,14 @@ class FirestoreService {
         patientName: patientName,
         doctorId: doctorId,
         unlockedBy: appointmentId,
+        chamberId: chamberId,
         followupDays: followupDays,
         followupMaxMessages: followupMaxMessages,
       );
+      return true;
     } catch (e) {
       debugPrint('Error unlocking follow-up chat: $e');
+      return false;
     }
   }
 

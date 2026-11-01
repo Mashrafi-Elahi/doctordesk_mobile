@@ -42,10 +42,12 @@ class GeminiService {
     return '';
   }
 
+  // gemini-2.5-flash is retired for new API keys (404 NOT_FOUND). The lite
+  // model answers in a few seconds; gemini-3.8-flash is the backup but often
+  // needs over 30 s, so it only runs if the lite model fails.
   static const List<String> _models = [
-    'gemini-2.5-flash',
     'gemini-2.5-flash-lite',
-    'gemini-2.0-flash-lite',
+    'gemini-3.8-flash',
   ];
 
   static const String _systemPrompt = '''
@@ -94,7 +96,7 @@ STRICT RULES:
             'X-goog-api-key': apiKey,
           },
           body: requestBody,
-        );
+        ).timeout(const Duration(seconds: 12));
 
         if (response.statusCode == 200) {
           final data = jsonDecode(response.body);

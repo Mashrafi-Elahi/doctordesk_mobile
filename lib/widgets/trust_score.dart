@@ -107,7 +107,7 @@ class ScoreBadge extends StatelessWidget {
         SizedBox(
           width: 140,
           child: ClipRRect(
-            borderRadius: BorderRadius.circular(6),
+            borderRadius: BorderRadius.circular(8),
             child: LinearProgressIndicator(
               value: value,
               minHeight: 6,

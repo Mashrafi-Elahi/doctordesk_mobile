@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:youtube_player_flutter/youtube_player_flutter.dart';
+import '../theme/app_constants.dart';
 import '../services/auth_service.dart';
 import '../services/data_service.dart';
 import '../services/app_language.dart';
+import '../widgets/user_avatar.dart';
 import '../widgets/profile_avatar_button.dart';
 import 'create_post_screen.dart';
 
@@ -104,17 +106,7 @@ class _FeedScreenState extends State<FeedScreen> {
                       horizontal: 14.0, vertical: 10.0),
                   child: Row(
                     children: [
-                      CircleAvatar(
-                        radius: 16,
-                        backgroundColor: colorScheme.primaryContainer,
-                        child: Icon(
-                          canPostMedia
-                              ? Icons.edit_note
-                              : Icons.chat_bubble_outline,
-                          size: 18,
-                          color: colorScheme.onPrimaryContainer,
-                        ),
-                      ),
+                      const UserAvatar.me(radius: 16),
                       const SizedBox(width: 12),
                       Expanded(
                         child: Text(
@@ -406,7 +398,7 @@ class _FeedCard extends StatelessWidget {
               onPressed: () => Navigator.pop(ctx, false),
               child: const Text('Cancel')),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.error),
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('Retract'),
           ),
@@ -444,7 +436,7 @@ class _FeedCard extends StatelessWidget {
               onPressed: () => Navigator.pop(ctx, false),
               child: const Text('Cancel')),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.error),
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('Delete'),
           ),
@@ -527,19 +519,7 @@ class _FeedCard extends StatelessWidget {
             // Header: Author details & more menu
             Row(
               children: [
-                CircleAvatar(
-                  radius: 20,
-                  backgroundColor: badgeColor.withValues(alpha: 0.15),
-                  child: Icon(
-                    type == 'video'
-                        ? Icons.ondemand_video
-                        : (type == 'question'
-                            ? Icons.help_outline
-                            : Icons.local_hospital_outlined),
-                    size: 20,
-                    color: badgeColor,
-                  ),
-                ),
+                UserAvatar(uid: authorUid, name: authorName, radius: 20),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
@@ -563,7 +543,7 @@ class _FeedCard extends StatelessWidget {
                               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                               decoration: BoxDecoration(
                                 color: Colors.blue.withValues(alpha: 0.12),
-                                borderRadius: BorderRadius.circular(6),
+                                borderRadius: BorderRadius.circular(8),
                               ),
                               child: const Text('You', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700)),
                             ),
@@ -572,7 +552,7 @@ class _FeedCard extends StatelessWidget {
                                 horizontal: 6, vertical: 2),
                             decoration: BoxDecoration(
                               color: badgeColor.withValues(alpha: 0.12),
-                              borderRadius: BorderRadius.circular(6),
+                              borderRadius: BorderRadius.circular(8),
                             ),
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
@@ -984,16 +964,10 @@ class _CommentsSheetState extends State<_CommentsSheet> {
                         child: Row(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            CircleAvatar(
+                            UserAvatar(
+                              uid: c['userId'] as String?,
+                              name: author,
                               radius: 14,
-                              backgroundColor: Colors.blue.shade100,
-                              child: Text(
-                                author.isNotEmpty
-                                    ? author[0].toUpperCase()
-                                    : 'U',
-                                style: TextStyle(
-                                    fontSize: 12, color: Colors.blue.shade900),
-                              ),
                             ),
                             const SizedBox(width: 10),
                             Expanded(

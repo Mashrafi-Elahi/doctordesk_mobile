@@ -15,7 +15,7 @@ class ReadAloudSettingTile extends StatelessWidget {
         return SwitchListTile.adaptive(
           secondary: Icon(
             isEnabled ? Icons.volume_up : Icons.volume_up_outlined,
-            color: isEnabled ? AppColors.primary : AppColors.textSecondary,
+            color: isEnabled ? Theme.of(context).colorScheme.primary : AppColors.textSecondary,
           ),
           title: Text(
             'Read Aloud',
@@ -26,7 +26,7 @@ class ReadAloudSettingTile extends StatelessWidget {
             style: AppTheme.caption,
           ),
           value: isEnabled,
-          activeTrackColor: AppColors.primary,
+          activeTrackColor: Theme.of(context).colorScheme.primary,
           onChanged: (val) {
             TtsService.instance.setReadAloud(val);
           },

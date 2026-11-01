@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../theme/app_constants.dart';
 import '../models/chat_message.dart';
 import '../services/auth_service.dart';
 import '../services/chat_service.dart';
 import '../services/document_service.dart';
-import '../theme/app_constants.dart';
 import '../widgets/health_documents_widget.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -114,7 +114,7 @@ class _ChatScreenState extends State<ChatScreen> {
             mainAxisSize: MainAxisSize.min,
             children: [
               ListTile(
-                leading: const Icon(Icons.folder_shared_outlined, color: AppColors.primary),
+                leading: Icon(Icons.folder_shared_outlined, color: Theme.of(context).colorScheme.primary),
                 title: const Text('Attach from Health Documents'),
                 subtitle: const Text('Choose a local prescription, scan, or report'),
                 onTap: () {
@@ -123,7 +123,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 },
               ),
               ListTile(
-                leading: const Icon(Icons.camera_alt_outlined, color: AppColors.primary),
+                leading: Icon(Icons.camera_alt_outlined, color: Theme.of(context).colorScheme.primary),
                 title: const Text('Take Photo & Attach'),
                 onTap: () async {
                   Navigator.pop(sheetCtx);
@@ -139,7 +139,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 },
               ),
               ListTile(
-                leading: const Icon(Icons.photo_library_outlined, color: AppColors.primary),
+                leading: Icon(Icons.photo_library_outlined, color: Theme.of(context).colorScheme.primary),
                 title: const Text('Choose from Gallery & Attach'),
                 onTap: () async {
                   Navigator.pop(sheetCtx);
@@ -202,7 +202,7 @@ class _ChatScreenState extends State<ChatScreen> {
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.error),
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('Revoke Share'),
           ),
@@ -231,7 +231,7 @@ class _ChatScreenState extends State<ChatScreen> {
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.error),
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('Close Conversation'),
           ),
@@ -447,7 +447,7 @@ class _ChatScreenState extends State<ChatScreen> {
                               constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.8),
                               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                               decoration: BoxDecoration(
-                                color: isMe ? AppColors.primary : Colors.grey.shade100,
+                                color: isMe ? Theme.of(context).colorScheme.primary : Colors.grey.shade100,
                                 borderRadius: BorderRadius.only(
                                   topLeft: const Radius.circular(16),
                                   topRight: const Radius.circular(16),
@@ -528,7 +528,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                         padding: const EdgeInsets.all(10),
                                         decoration: BoxDecoration(
                                           color: isMe ? Colors.white.withValues(alpha: 0.15) : Colors.white,
-                                          borderRadius: BorderRadius.circular(10),
+                                          borderRadius: BorderRadius.circular(12),
                                           border: Border.all(color: isMe ? Colors.white30 : Colors.grey.shade300),
                                         ),
                                         child: Column(
@@ -539,7 +539,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                               children: [
                                                 Icon(
                                                   msg.mimeType == 'application/pdf' ? Icons.picture_as_pdf : Icons.image,
-                                                  color: isMe ? Colors.white : AppColors.primary,
+                                                  color: isMe ? Colors.white : Theme.of(context).colorScheme.primary,
                                                   size: 20,
                                                 ),
                                                 const SizedBox(width: 8),
@@ -582,15 +582,15 @@ class _ChatScreenState extends State<ChatScreen> {
                                                   child: Container(
                                                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                                                     decoration: BoxDecoration(
-                                                      color: isMe ? Colors.white : AppColors.primary,
-                                                      borderRadius: BorderRadius.circular(6),
+                                                      color: isMe ? Colors.white : Theme.of(context).colorScheme.primary,
+                                                      borderRadius: BorderRadius.circular(8),
                                                     ),
                                                     child: Text(
                                                       'View / Download',
                                                       style: TextStyle(
                                                         fontSize: 11,
                                                         fontWeight: FontWeight.w600,
-                                                        color: isMe ? AppColors.primary : Colors.white,
+                                                        color: isMe ? Theme.of(context).colorScheme.primary : Colors.white,
                                                       ),
                                                     ),
                                                   ),
@@ -603,7 +603,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                                                       decoration: BoxDecoration(
                                                         color: Colors.red.withValues(alpha: 0.2),
-                                                        borderRadius: BorderRadius.circular(6),
+                                                        borderRadius: BorderRadius.circular(8),
                                                       ),
                                                       child: const Text(
                                                         'Revoke Share',
@@ -648,7 +648,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     child: Row(
                       children: [
                         IconButton(
-                          icon: const Icon(Icons.attach_file, color: AppColors.primary),
+                          icon: Icon(Icons.attach_file, color: Theme.of(context).colorScheme.primary),
                           tooltip: 'Attach Document',
                           onPressed: _showAttachmentPicker,
                         ),

@@ -20,6 +20,7 @@ import '../services/firestore_service.dart';
 import '../services/tts_service.dart';
 import '../theme/app_constants.dart';
 import '../theme/app_theme.dart';
+import '../widgets/user_avatar.dart';
 import '../widgets/auth_modal.dart';
 import '../widgets/chamber_accessibility.dart';
 
@@ -90,12 +91,14 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
     });
     try {
       final doctor = await ApiService.fetchDoctorById(widget.doctorId);
+      if (!mounted) return;
       setState(() {
         _doctor = doctor;
         _isLoading = false;
       });
       _checkChatUnlock(doctor);
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _error = e.toString();
         _isLoading = false;
@@ -564,18 +567,6 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
     }
 
     final doctor = _doctor!;
-    final initials = doctor.name.isNotEmpty
-        ? doctor.name
-            .split(' ')
-            .where((w) =>
-                w.isNotEmpty &&
-                !RegExp(r'^(Dr\.?|Prof\.?|Assoc\.?|Asst\.?)$',
-                        caseSensitive: false)
-                    .hasMatch(w))
-            .take(2)
-            .map((w) => w[0].toUpperCase())
-            .join()
-        : '?';
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -619,10 +610,10 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
               padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(AppConstants.radiusHero),
-                gradient: const LinearGradient(
+                gradient: LinearGradient(
                   begin: Alignment.centerLeft,
                   end: Alignment.centerRight,
-                  colors: [AppColors.primaryTint, AppColors.primaryLight],
+                  colors: [Theme.of(context).colorScheme.primaryContainer, Theme.of(context).colorScheme.primary.withValues(alpha: 0.3)],
                 ),
                 boxShadow: AppConstants.elevatedShadow,
               ),
@@ -650,15 +641,15 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                             padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                             decoration: BoxDecoration(
                               color: Colors.white,
-                              borderRadius: BorderRadius.circular(10),
-                              border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.3)),
                             ),
-                            child: const Row(
+                            child: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                Icon(Icons.check_circle, size: 12, color: AppColors.primary),
-                                SizedBox(width: 4),
-                                Text(
+                                Icon(Icons.check_circle, size: 12, color: Theme.of(context).colorScheme.primary),
+                                const SizedBox(width: 4),
+                                const Text(
                                   'Claimed',
                                   style: TextStyle(
                                     fontSize: 10.5,
@@ -676,7 +667,7 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                             padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                             decoration: BoxDecoration(
                               color: Colors.green.shade50,
-                              borderRadius: BorderRadius.circular(10),
+                              borderRadius: BorderRadius.circular(12),
                               border: Border.all(color: Colors.green.shade300),
                             ),
                             child: Row(
@@ -703,7 +694,7 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                             style: GoogleFonts.poppins(
                               fontSize: 13,
                               fontWeight: FontWeight.w500,
-                              color: AppColors.primaryDark,
+                              color: Theme.of(context).colorScheme.onPrimaryContainer,
                             ),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
@@ -765,28 +756,13 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                   ),
                   const SizedBox(width: 14),
                   // Right: circular/large avatar area
-                  SizedBox(
-                    width: 76,
-                    height: 76,
-                    child: CircleAvatar(
-                      radius: 38,
-                      backgroundColor: Colors.white,
-                      backgroundImage: (doctor.certificateImageUrl != null &&
-                              doctor.certificateImageUrl!.isNotEmpty)
-                          ? NetworkImage(doctor.certificateImageUrl!)
-                          : null,
-                      child: (doctor.certificateImageUrl == null ||
-                              doctor.certificateImageUrl!.isEmpty)
-                          ? Text(
-                              initials,
-                              style: GoogleFonts.poppins(
-                                fontSize: 24,
-                                fontWeight: FontWeight.w600,
-                                color: AppColors.primary,
-                              ),
-                            )
-                          : null,
-                    ),
+                  // Account photo of the claiming doctor; never the BMDC
+                  // certificate upload.
+                  UserAvatar(
+                    uid: doctor.claimedByUid,
+                    name: doctor.name,
+                    radius: 38,
+                    ring: true,
                   ),
                 ],
               ),
@@ -877,7 +853,7 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                             color: Colors.white,
                           ),
                         ),
-                        backgroundColor: AppColors.primary,
+                        backgroundColor: Theme.of(context).colorScheme.primary,
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(AppConstants.radiusChip),
                         ),
@@ -911,8 +887,8 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                                 Row(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    const Icon(Icons.location_on_outlined,
-                                        color: AppColors.primary, size: 20),
+                                    Icon(Icons.location_on_outlined,
+                                        color: Theme.of(context).colorScheme.primary, size: 20),
                                     const SizedBox(width: 8),
                                     Expanded(
                                       child: Column(
@@ -970,16 +946,16 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                                         return Container(
                                           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                                           decoration: BoxDecoration(
-                                            color: AppColors.primaryTint,
-                                            borderRadius: BorderRadius.circular(10),
-                                            border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+                                            color: Theme.of(context).colorScheme.primaryContainer,
+                                            borderRadius: BorderRadius.circular(12),
+                                            border: Border.all(color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.3)),
                                           ),
                                           child: Text(
                                             feat,
                                             style: GoogleFonts.poppins(
                                               fontSize: 11,
                                               fontWeight: FontWeight.w500,
-                                              color: AppColors.primary,
+                                              color: Theme.of(context).colorScheme.primary,
                                             ),
                                           ),
                                         );
@@ -1107,7 +1083,7 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                       flex: 5,
                       child: FilledButton.icon(
                         style: FilledButton.styleFrom(
-                          backgroundColor: const Color(0xFF16A34A),
+                          backgroundColor: AppColors.success,
                           minimumSize: const Size(0, 50),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(AppConstants.radiusButton),
@@ -1157,13 +1133,13 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
         decoration: BoxDecoration(
           color: AppColors.surface,
           borderRadius: BorderRadius.circular(AppConstants.radiusButton),
-          border: Border.all(color: AppColors.primary, width: 1.0),
+          border: Border.all(color: Theme.of(context).colorScheme.primary, width: 1.0),
           boxShadow: AppConstants.softShadow,
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 20, color: AppColors.primary),
+            Icon(icon, size: 20, color: Theme.of(context).colorScheme.primary),
             const SizedBox(height: 4),
             Text(
               value,
@@ -1189,7 +1165,7 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('• ', style: GoogleFonts.poppins(fontSize: 14, fontWeight: FontWeight.bold, color: AppColors.primary)),
+          Text('• ', style: GoogleFonts.poppins(fontSize: 14, fontWeight: FontWeight.bold, color: Theme.of(context).colorScheme.primary)),
           Expanded(
             child: Text(text, style: AppTheme.body),
           ),
@@ -1278,7 +1254,7 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 decoration: BoxDecoration(
                   color: Colors.grey.shade100,
-                  borderRadius: BorderRadius.circular(10),
+                  borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: Colors.grey.shade300),
                 ),
                 child: Row(
@@ -1372,7 +1348,6 @@ class _ReviewCard extends StatelessWidget {
         (review['patientUid'] != null && review['patientUid'] == currentUid) ||
         AuthService.userRoles.isAdmin;
 
-    final initials = raterName.isNotEmpty ? raterName[0].toUpperCase() : 'P';
 
     return Container(
       width: double.infinity,
@@ -1388,17 +1363,10 @@ class _ReviewCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              CircleAvatar(
+              UserAvatar(
+                uid: (review['userId'] ?? review['patientUid'])?.toString(),
+                name: raterName,
                 radius: 16,
-                backgroundColor: AppColors.primaryLight,
-                child: Text(
-                  initials,
-                  style: GoogleFonts.poppins(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.primary,
-                  ),
-                ),
               ),
               const SizedBox(width: 10),
               Expanded(
@@ -1424,12 +1392,12 @@ class _ReviewCard extends StatelessWidget {
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                             decoration: BoxDecoration(
-                              color: AppColors.primaryTint,
-                              borderRadius: BorderRadius.circular(6),
+                              color: Theme.of(context).colorScheme.primaryContainer,
+                              borderRadius: BorderRadius.circular(8),
                             ),
                             child: Text(
                               'Specialist',
-                              style: GoogleFonts.poppins(fontSize: 10, fontWeight: FontWeight.bold, color: AppColors.primary),
+                              style: GoogleFonts.poppins(fontSize: 10, fontWeight: FontWeight.bold, color: Theme.of(context).colorScheme.primary),
                             ),
                           ),
                         ],
@@ -1468,7 +1436,7 @@ class _ReviewCard extends StatelessWidget {
                         actions: [
                           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
                           FilledButton(
-                            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                            style: FilledButton.styleFrom(backgroundColor: AppColors.error),
                             onPressed: () => Navigator.pop(ctx, true),
                             child: const Text('Delete'),
                           ),
@@ -1690,7 +1658,7 @@ class _ProfileDoctorClaimSheetState extends State<ProfileDoctorClaimSheet> {
                         ? Row(
                             children: [
                               ClipRRect(
-                                borderRadius: BorderRadius.circular(6),
+                                borderRadius: BorderRadius.circular(8),
                                 child: Image.file(_certFile!,
                                     width: 48, height: 48, fit: BoxFit.cover),
                               ),
@@ -1942,7 +1910,7 @@ class _ReviewSheetState extends State<_ReviewSheet> {
               Stack(
                 children: [
                   ClipRRect(
-                    borderRadius: BorderRadius.circular(10),
+                    borderRadius: BorderRadius.circular(12),
                     child: Image.file(_proofFile!,
                         width: double.infinity, height: 140, fit: BoxFit.cover),
                   ),
@@ -1969,7 +1937,7 @@ class _ReviewSheetState extends State<_ReviewSheet> {
                       child: Container(
                         decoration: BoxDecoration(
                           color: Colors.black38,
-                          borderRadius: BorderRadius.circular(10),
+                          borderRadius: BorderRadius.circular(12),
                         ),
                         child: Center(
                           child: Column(

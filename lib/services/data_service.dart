@@ -652,8 +652,8 @@ class DataService {
     );
   }
 
-  static Stream<int> streamTodayWaitingCount(String chamberId) {
-    return FirestoreService.streamTodayWaitingCount(chamberId);
+  static Stream<int> streamTodayWaitingCount(String chamberId, {String? doctorId}) {
+    return FirestoreService.streamTodayWaitingCount(chamberId, doctorId: doctorId);
   }
 
   static Future<List<String>> fetchChamberDoctors(String chamberId, {String? chamberName}) {
@@ -770,11 +770,13 @@ class DataService {
 
   static Future<List<DocumentSnapshot<Map<String, dynamic>>>> getAffectedAppointments({
     required String chamberId,
+    String? doctorId,
     required DateTime date,
     required TimeOfDay newStartTime,
   }) {
     return SchedulingService.getAffectedAppointments(
       chamberId: chamberId,
+      doctorId: doctorId,
       date: date,
       newStartTime: newStartTime,
     );

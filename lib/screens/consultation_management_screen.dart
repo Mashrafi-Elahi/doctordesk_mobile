@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import '../theme/app_constants.dart';
 import '../models/consultation.dart';
+import '../widgets/state_views.dart';
 import '../services/auth_service.dart';
 import '../services/consultation_service.dart';
 import '../theme/app_theme.dart';
-import '../theme/app_constants.dart';
 import 'chat_screen.dart';
 
 class ConsultationManagementScreen extends StatefulWidget {
@@ -117,7 +118,7 @@ class _ConsultationManagementScreenState extends State<ConsultationManagementScr
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.error),
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('Decline Request'),
           ),
@@ -210,6 +211,10 @@ class _ConsultationManagementScreenState extends State<ConsultationManagementScr
               doctorUid: widget.isDoctor ? currentUid : null,
             ),
             builder: (context, snapshot) {
+          if (snapshot.hasError) {
+            return ErrorStateView.fromError(snapshot.error,
+                what: 'payment requests', onRetry: () => setState(() {}));
+          }
               if (snapshot.connectionState == ConnectionState.waiting) {
                 return const Center(child: CircularProgressIndicator());
               }
@@ -308,7 +313,7 @@ class _ConsultationManagementScreenState extends State<ConsultationManagementScr
                               Expanded(
                                 child: FilledButton.icon(
                                   style: FilledButton.styleFrom(
-                                    backgroundColor: const Color(0xFF16A34A),
+                                    backgroundColor: AppColors.success,
                                     visualDensity: VisualDensity.compact,
                                   ),
                                   icon: const Icon(Icons.check, size: 16),
@@ -339,6 +344,10 @@ class _ConsultationManagementScreenState extends State<ConsultationManagementScr
                 ? ConsultationService.streamDoctorConsultations(currentUid)
                 : ConsultationService.streamPatientConsultations(currentUid),
             builder: (context, snapshot) {
+          if (snapshot.hasError) {
+            return ErrorStateView.fromError(snapshot.error,
+                what: 'consultations', onRetry: () => setState(() {}));
+          }
               if (snapshot.connectionState == ConnectionState.waiting) {
                 return const Center(child: CircularProgressIndicator());
               }
@@ -384,8 +393,8 @@ class _ConsultationManagementScreenState extends State<ConsultationManagementScr
                     child: ListTile(
                       contentPadding: const EdgeInsets.all(14),
                       leading: CircleAvatar(
-                        backgroundColor: AppColors.primaryLight,
-                        child: Icon(widget.isDoctor ? Icons.person : Icons.medical_services, color: AppColors.primary),
+                        backgroundColor: Theme.of(context).colorScheme.primaryContainer,
+                        child: Icon(widget.isDoctor ? Icons.person : Icons.medical_services, color: Theme.of(context).colorScheme.primary),
                       ),
                       title: Text(otherName, style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 15)),
                       subtitle: Text('Status: Active Consultation · ৳${c.amount.toStringAsFixed(0)}', style: const TextStyle(fontSize: 12.5)),
@@ -436,7 +445,7 @@ class _ConsultationManagementScreenState extends State<ConsultationManagementScr
                     title: const Text('Enable Online Consultations', style: TextStyle(fontWeight: FontWeight.w600)),
                     subtitle: const Text('Allow patients to submit payment and chat with you directly'),
                     value: _consultEnabled,
-                    activeThumbColor: AppColors.primary,
+                    activeThumbColor: Theme.of(context).colorScheme.primary,
                     onChanged: (val) => setState(() => _consultEnabled = val),
                   ),
                   const SizedBox(height: 16),

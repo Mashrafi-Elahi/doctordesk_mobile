@@ -1,6 +1,9 @@
+import 'dart:async';
 import 'dart:io';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import '../theme/app_constants.dart';
 import '../services/document_service.dart';
 
 class HealthDocumentsWidget extends StatefulWidget {
@@ -24,10 +27,36 @@ class _HealthDocumentsWidgetState extends State<HealthDocumentsWidget> {
   String _searchQuery = '';
   String? _selectedFolderId;
 
+  StreamSubscription<User?>? _authSub;
+  String? _loadedUid;
+
   @override
   void initState() {
     super.initState();
+    _loadedUid = FirebaseAuth.instance.currentUser?.uid;
     _loadData();
+    // Documents are stored per account. Profile keeps this widget alive across
+    // sign-in/out, so clear and reload when the account changes; otherwise the
+    // next user would see the previous user's health records.
+    _authSub = FirebaseAuth.instance.authStateChanges().listen((user) {
+      if (user?.uid == _loadedUid) return;
+      _loadedUid = user?.uid;
+      if (mounted) {
+        setState(() {
+          _folders = [];
+          _docs = [];
+          _selectedFolderId = null;
+          _loading = true;
+        });
+      }
+      _loadData();
+    });
+  }
+
+  @override
+  void dispose() {
+    _authSub?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadData() async {
@@ -154,7 +183,7 @@ class _HealthDocumentsWidgetState extends State<HealthDocumentsWidget> {
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.error),
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('Delete'),
           ),
@@ -278,7 +307,7 @@ class _HealthDocumentsWidgetState extends State<HealthDocumentsWidget> {
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.error),
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('Delete'),
           ),
@@ -405,7 +434,7 @@ class _HealthDocumentsWidgetState extends State<HealthDocumentsWidget> {
                     hintText: 'Search health records...',
                     prefixIcon: const Icon(Icons.search, size: 20),
                     contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 12),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                   ),
                   onChanged: (val) => setState(() => _searchQuery = val.trim()),
                 ),

@@ -43,6 +43,15 @@ class FreeSlotsResult {
 }
 
 class SchedulingService {
+  /// Last queue number handed out for a chamber-day. Walk-ins used to write
+  /// `lastNumber` and Accept `lastQueuePosition`; reading the higher of the two
+  /// (and writing both) keeps one sequence with no duplicate numbers.
+  static int lastQueueNumber(Map<String, dynamic>? data) {
+    final a = (data?['lastQueuePosition'] as num?)?.toInt() ?? 0;
+    final b = (data?['lastNumber'] as num?)?.toInt() ?? 0;
+    return a > b ? a : b;
+  }
+
   static final FirebaseFirestore _db = FirebaseFirestore.instance;
 
   static String dateKey(DateTime dt) {
@@ -457,6 +466,16 @@ class SchedulingService {
       final counter = await tx.get(counterRef);
       final override = await tx.get(overrideRef);
 
+      // Resolve the doctor's auth UID now: transactions must do every read
+      // before the first write.
+      String doctorAuthUid = '';
+      if (doctorId.isNotEmpty) {
+        final docSnap = await tx.get(_db.collection('doctors').doc(doctorId));
+        if (docSnap.exists) {
+          doctorAuthUid = (docSnap.data()?['claimedByUid'] ?? '').toString();
+        }
+      }
+
       if (override.exists) {
         final st = (override.data()?['status'] ?? '').toString().toLowerCase();
         if (st == 'closed' || st == 'full') {
@@ -468,7 +487,7 @@ class SchedulingService {
         throw StateError('That slot is already taken by another appointment.');
       }
 
-      final lastPos = (counter.exists ? (counter.data()?['lastQueuePosition'] as num? ?? 0).toInt() : 0);
+      final lastPos = counter.exists ? lastQueueNumber(counter.data()) : 0;
       assignedQueue = (appt['queuePosition'] as num?)?.toInt() ?? (lastPos + 1);
 
       final oldSlot = appt['slotId']?.toString();
@@ -498,18 +517,9 @@ class SchedulingService {
         'chamberId': chamberId,
         'date': targetDateKey,
         'lastQueuePosition': appt['queuePosition'] == null ? assignedQueue : lastPos,
+        'lastNumber': appt['queuePosition'] == null ? assignedQueue : lastPos,
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
-
-      // Resolve Doctor's Auth UID from doctor document
-      String doctorAuthUid = '';
-      if (doctorId.isNotEmpty) {
-        final docRef = _db.collection('doctors').doc(doctorId);
-        final docSnap = await tx.get(docRef);
-        if (docSnap.exists) {
-          doctorAuthUid = (docSnap.data()?['claimedByUid'] ?? '').toString();
-        }
-      }
 
       // Check if actor is operator
       final isActorOperator = actorUid.isNotEmpty && actorUid != doctorAuthUid;
@@ -794,6 +804,7 @@ class SchedulingService {
 
   static Future<List<DocumentSnapshot<Map<String, dynamic>>>> getAffectedAppointments({
     required String chamberId,
+    String? doctorId,
     required DateTime date,
     required TimeOfDay newStartTime,
   }) async {
@@ -801,9 +812,14 @@ class SchedulingService {
     final endOfDay = startOfDay.add(const Duration(days: 1));
     final threshold = DateTime(date.year, date.month, date.day, newStartTime.hour, newStartTime.minute);
 
-    final snap = await _db
-        .collection('appointments')
-        .where('chamberId', isEqualTo: chamberId)
+    // Operators may only read appointments through (chamberId, doctorId), so
+    // the doctor filter is required for the rules to allow this query.
+    Query<Map<String, dynamic>> query =
+        _db.collection('appointments').where('chamberId', isEqualTo: chamberId);
+    if (doctorId != null && doctorId.isNotEmpty) {
+      query = query.where('doctorId', isEqualTo: doctorId);
+    }
+    final snap = await query
         .where('status', isEqualTo: 'confirmed')
         .where('scheduledTime', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
         .where('scheduledTime', isLessThan: Timestamp.fromDate(endOfDay))
@@ -892,7 +908,7 @@ class SchedulingService {
       }
 
       final queueSnap = await tx.get(queueRef);
-      final currentQueue = (queueSnap.data()?['lastNumber'] as num?)?.toInt() ?? 0;
+      final currentQueue = lastQueueNumber(queueSnap.data());
       assignedQueuePos = currentQueue + 1;
 
       tx.set(
@@ -901,6 +917,7 @@ class SchedulingService {
           'chamberId': chamberId,
           'date': dKey,
           'lastNumber': assignedQueuePos,
+          'lastQueuePosition': assignedQueuePos,
           'updatedAt': FieldValue.serverTimestamp(),
         },
         SetOptions(merge: true),

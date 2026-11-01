@@ -1,13 +1,14 @@
-import 'package:flutter/foundation.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
+import '../theme/app_constants.dart';
 import '../services/appointment_queries.dart';
 import '../services/auth_service.dart';
 import '../services/chamber_resolver.dart';
 import '../services/data_service.dart';
 import '../services/firestore_service.dart';
 import '../services/scheduling_service.dart';
+import '../widgets/state_views.dart';
 import '../widgets/profile_avatar_button.dart';
 
 /// Operator Desk starts with assigned chambers. Selecting one opens a focused
@@ -60,9 +61,14 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
     }
     return null;
   }
-  bool get _isDoctorDesk =>
-      (widget.doctorId != null && widget.doctorId!.trim().isNotEmpty) ||
-      (AuthService.userRoles.isDoctor && _resolvedDoctorId != null);
+  // Doctor mode only when the desk belongs to the signed-in user's own doctor
+  // profile. An operator opening a chamber also passes a doctorId, but must use
+  // the chamber-scoped queries: the rules only let operators read appointments
+  // through (chamberId, doctorId), so doctor-wide queries are refused.
+  bool get _isDoctorDesk {
+    final own = AuthService.userRoles.doctorProfileId?.trim();
+    return own != null && own.isNotEmpty && own == _resolvedDoctorId;
+  }
 
   @override
   void initState() {
@@ -193,9 +199,14 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
         }
       }
 
-      // Recompute handledBy on load
-      final chamberIds = desks.map((d) => d.chamberId).toSet().toList();
-      await DataService.reroutePendingRequests(chamberIds: chamberIds);
+      // Recompute handledBy on load, one desk at a time: operators can only
+      // read appointments through (chamberId, doctorId).
+      for (final desk in desks) {
+        await DataService.reroutePendingRequests(
+          chamberIds: [desk.chamberId],
+          doctorId: desk.doctorId,
+        );
+      }
 
       if (!mounted) return;
       setState(() {
@@ -227,20 +238,18 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
   @override
   Widget build(BuildContext context) {
     final body = _loading
-        ? const Center(child: CircularProgressIndicator())
+        ? const LoadingView(message: 'Loading your chambers…')
         : _error != null
-            ? _ErrorState(message: _error!, onRetry: _loadAssignments)
+            ? ErrorStateView(message: _error!, onRetry: _loadAssignments)
             : _assignedDesks.isEmpty
-                ? Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(32),
-                      child: Text(
-                        _isDoctorDesk
-                            ? 'Add a chamber in the Chambers tab'
-                            : 'No chamber assignments are available for this operator.',
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
+                ? EmptyStateView(
+                    icon: Icons.storefront_outlined,
+                    title: _isDoctorDesk
+                        ? 'No chambers yet'
+                        : 'No chamber assignments',
+                    message: _isDoctorDesk
+                        ? 'Add a chamber in the Chambers tab'
+                        : 'No chamber assignments are available for this operator.',
                   )
                 : _isDetail
                     ? _ChamberDeskDetail(
@@ -443,6 +452,7 @@ class _ChamberDeskDetail extends StatelessWidget {
             doctorId: doctorId,
           ),
           TabBar(
+            labelPadding: const EdgeInsets.symmetric(horizontal: 8),
             labelColor: theme.colorScheme.primary,
             unselectedLabelColor: theme.colorScheme.onSurfaceVariant,
             indicatorColor: theme.colorScheme.primary,
@@ -934,7 +944,7 @@ class _ChamberScheduleHeader extends StatelessWidget {
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(
                           content: Text('Patient added to queue as #${res["queuePosition"]}!'),
-                          backgroundColor: Colors.green,
+                          backgroundColor: AppColors.success,
                         ),
                       );
                     }
@@ -979,7 +989,7 @@ class _ChamberScheduleHeader extends StatelessWidget {
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.error),
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('Close Day'),
           ),
@@ -1045,12 +1055,19 @@ class _ChamberScheduleHeader extends StatelessWidget {
 
     if (confirmed != true || !context.mounted) return;
 
-    // Check for affected patients confirmed before the new start time
-    final affected = await SchedulingService.getAffectedAppointments(
-      chamberId: chamberId,
-      date: DateTime.now(),
-      newStartTime: pickedStart,
-    );
+    // Check for affected patients confirmed before the new start time. This is
+    // advisory, so a failed lookup must not stop the hours being saved.
+    var affected = <DocumentSnapshot<Map<String, dynamic>>>[];
+    try {
+      affected = await SchedulingService.getAffectedAppointments(
+        chamberId: chamberId,
+        doctorId: doctorId ?? AuthService.userRoles.doctorProfileId,
+        date: DateTime.now(),
+        newStartTime: pickedStart,
+      );
+    } catch (e) {
+      debugPrint('Affected-appointments check failed: $e');
+    }
 
     if (affected.isNotEmpty && context.mounted) {
       await showDialog<void>(
@@ -1111,7 +1128,7 @@ class _ChamberScheduleHeader extends StatelessWidget {
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error updating hours: $e')),
+          SnackBar(content: Text(friendlyErrorMessage(e, what: 'today\'s hours'))),
         );
       }
     }
@@ -1120,7 +1137,7 @@ class _ChamberScheduleHeader extends StatelessWidget {
 
 enum _DeskView { requests, queue, done }
 
-class _AppointmentList extends StatelessWidget {
+class _AppointmentList extends StatefulWidget {
   const _AppointmentList({
     required this.query,
     required this.view,
@@ -1132,30 +1149,61 @@ class _AppointmentList extends StatelessWidget {
   final String chamberId;
 
   @override
+  State<_AppointmentList> createState() => _AppointmentListState();
+}
+
+class _AppointmentListState extends State<_AppointmentList> {
+  // Held in state so parent rebuilds don't re-subscribe, and Retry can.
+  late Stream<QuerySnapshot<Map<String, dynamic>>> _stream;
+
+  _DeskView get view => widget.view;
+  String get chamberId => widget.chamberId;
+
+  @override
+  void initState() {
+    super.initState();
+    _stream = widget.query.snapshots();
+  }
+
+  @override
+  void didUpdateWidget(covariant _AppointmentList oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.chamberId != widget.chamberId ||
+        oldWidget.view != widget.view) {
+      _stream = widget.query.snapshots();
+    }
+  }
+
+  void _retry() => setState(() => _stream = widget.query.snapshots());
+
+  @override
   Widget build(BuildContext context) {
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: query.snapshots(),
+      stream: _stream,
       builder: (context, snapshot) {
         if (snapshot.hasError) {
-          final err = snapshot.error.toString();
-          final displayMsg = kDebugMode
-              ? 'Error loading appointments: $err'
-              : (err.contains('permission-denied')
-                  ? 'Access denied. You may not be assigned to this chamber.'
-                  : (err.contains('FAILED_PRECONDITION') || err.contains('requires an index')
-                      ? 'Database index required. Please deploy Firestore indexes.'
-                      : 'Unable to load appointments.'));
-          return _ErrorState(message: displayMsg, onRetry: () {});
+          return ErrorStateView.fromError(snapshot.error,
+              onRetry: _retry, what: 'appointments');
         }
-        if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+        if (!snapshot.hasData) return const LoadingView();
         final rawDocs = snapshot.data!.docs;
         if (rawDocs.isEmpty) {
-          final message = switch (view) {
-            _DeskView.requests => 'No appointment requests.',
-            _DeskView.queue => 'No patients are waiting today.',
-            _DeskView.done => 'No completed appointments today.',
+          return switch (view) {
+            _DeskView.requests => const EmptyStateView(
+                icon: Icons.inbox_outlined,
+                title: 'No appointment requests',
+                message: 'New patient bookings for this chamber appear here instantly.',
+              ),
+            _DeskView.queue => const EmptyStateView(
+                icon: Icons.people_outline,
+                title: 'No patients waiting today',
+                message: 'Accepted requests join this queue in order.',
+              ),
+            _DeskView.done => const EmptyStateView(
+                icon: Icons.task_alt,
+                title: 'No completed visits today',
+              ),
           };
-          return Center(child: Text(message));
         }
 
         // Today's Queue sorted strictly by queuePosition
@@ -1234,6 +1282,9 @@ class _AppointmentRow extends StatelessWidget {
   }
 
   Future<void> _accept(BuildContext context) async {
+    // Captured up front: the row leaves the list as soon as its status
+    // changes, so its context is gone by the time the write finishes.
+    final messenger = ScaffoldMessenger.of(context);
     final doctorId = (data['doctorId'] ?? '').toString();
     final date = _scheduledTime ?? DateTime.now();
 
@@ -1331,21 +1382,24 @@ class _AppointmentRow extends StatelessWidget {
         appointmentId: reference.id,
         confirmedTime: selected,
       );
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+      {
+        messenger.showSnackBar(
           const SnackBar(content: Text('Appointment accepted and confirmed.')),
         );
       }
     } catch (error) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not accept: $error')),
+      {
+        messenger.showSnackBar(
+          SnackBar(content: Text('Could not accept. ${friendlyErrorMessage(error)}')),
         );
       }
     }
   }
 
   Future<void> _reschedule(BuildContext context) async {
+    // Captured up front: the row leaves the list as soon as its status
+    // changes, so its context is gone by the time the write finishes.
+    final messenger = ScaffoldMessenger.of(context);
     final doctorId = (data['doctorId'] ?? '').toString();
     final initial = _scheduledTime ?? DateTime.now();
 
@@ -1429,21 +1483,24 @@ class _AppointmentRow extends StatelessWidget {
         appointmentId: reference.id,
         newTime: selected,
       );
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+      {
+        messenger.showSnackBar(
           const SnackBar(content: Text('Appointment rescheduled.')),
         );
       }
     } catch (error) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not reschedule: $error')),
+      {
+        messenger.showSnackBar(
+          SnackBar(content: Text('Could not reschedule. ${friendlyErrorMessage(error)}')),
         );
       }
     }
   }
 
   Future<void> _reject(BuildContext context) async {
+    // Captured up front: the row leaves the list as soon as its status
+    // changes, so its context is gone by the time the write finishes.
+    final messenger = ScaffoldMessenger.of(context);
     final reason = TextEditingController();
     final confirmed = await showDialog<bool>(
       context: context,
@@ -1458,7 +1515,7 @@ class _AppointmentRow extends StatelessWidget {
         actions: [
           TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.error),
             onPressed: () {
               if (reason.text.trim().isEmpty) {
                 ScaffoldMessenger.of(dialogContext).showSnackBar(
@@ -1476,18 +1533,39 @@ class _AppointmentRow extends StatelessWidget {
     if (confirmed != true) return;
     try {
       await DataService.rejectAppointment(appointmentId: reference.id, reason: reason.text.trim());
-      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Appointment rejected.')));
+      messenger.showSnackBar(const SnackBar(content: Text('Appointment rejected.')));
     } catch (error) {
-      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not reject: $error')));
+      messenger.showSnackBar(SnackBar(content: Text('Could not reject. ${friendlyErrorMessage(error)}')));
+    }
+  }
+
+  Future<void> _startVisit(BuildContext context) async {
+    // Captured up front: the row leaves the list as soon as its status
+    // changes, so its context is gone by the time the write finishes.
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await FirestoreService.markAppointmentInProgress(reference.id);
+      messenger.showSnackBar(SnackBar(content: Text('$_patientName is now in consultation.')));
+    } catch (error) {
+      messenger.showSnackBar(SnackBar(content: Text('Could not start visit. ${friendlyErrorMessage(error)}')));
     }
   }
 
   Future<void> _markDone(BuildContext context) async {
+    // Captured up front: the row leaves the list as soon as its status
+    // changes, so its context is gone by the time the write finishes.
+    final messenger = ScaffoldMessenger.of(context);
     try {
-      await FirestoreService.markAppointmentCompletedAndUnlockChat(reference.id);
-      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Appointment marked done; follow-up chat unlocked.')));
+      final chatUnlocked = await FirestoreService.markAppointmentCompletedAndUnlockChat(reference.id);
+      {
+        messenger.showSnackBar(SnackBar(
+          content: Text(chatUnlocked
+              ? 'Visit marked done. Follow-up chat unlocked.'
+              : 'Visit marked done.'),
+        ));
+      }
     } catch (error) {
-      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not complete: $error')));
+      messenger.showSnackBar(SnackBar(content: Text('Could not complete. ${friendlyErrorMessage(error)}')));
     }
   }
 
@@ -1603,13 +1681,32 @@ class _AppointmentRow extends StatelessWidget {
                     ],
                   ),
                 ] else if (view == _DeskView.queue)
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: TextButton.icon(
-                      onPressed: () => _markDone(context),
-                      icon: const Icon(Icons.check_circle_outline),
-                      label: const Text('Mark done'),
-                    ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      if (data['status'] == 'in_progress')
+                        Chip(
+                          avatar: const Icon(Icons.medical_services_outlined,
+                              size: 16, color: Colors.white),
+                          label: const Text('In progress'),
+                          labelStyle: const TextStyle(
+                              color: Colors.white, fontWeight: FontWeight.w600),
+                          backgroundColor: Theme.of(context).colorScheme.primary,
+                          visualDensity: VisualDensity.compact,
+                        )
+                      else
+                        FilledButton.tonalIcon(
+                          onPressed: () => _startVisit(context),
+                          icon: const Icon(Icons.play_arrow_rounded, size: 18),
+                          label: const Text('Start visit'),
+                        ),
+                      const SizedBox(width: 8),
+                      TextButton.icon(
+                        onPressed: () => _markDone(context),
+                        icon: const Icon(Icons.check_circle_outline),
+                        label: const Text('Mark done'),
+                      ),
+                    ],
                   ),
               ],
             ),
@@ -1620,26 +1717,3 @@ class _AppointmentRow extends StatelessWidget {
   }
 }
 
-class _ErrorState extends StatelessWidget {
-  const _ErrorState({required this.message, required this.onRetry});
-
-  final String message;
-  final VoidCallback onRetry;
-
-  @override
-  Widget build(BuildContext context) => Center(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.cloud_off_outlined, size: 44),
-              const SizedBox(height: 12),
-              Text(message, textAlign: TextAlign.center),
-              const SizedBox(height: 12),
-              OutlinedButton(onPressed: onRetry, child: const Text('Retry')),
-            ],
-          ),
-        ),
-      );
-}

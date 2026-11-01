@@ -38,6 +38,8 @@ class MainShellState extends State<MainShell> {
   UserRoles _userRoles = const UserRoles();
   StreamSubscription<User?>? _authSubscription;
   bool _showedVerificationNotice = false;
+  String? _rolesUid;
+  bool _rolesLoaded = false;
 
   @override
   void initState() {
@@ -75,21 +77,31 @@ class MainShellState extends State<MainShell> {
   Future<void> _refreshRoles() async {
     final roles = await AuthService.fetchUserRoles();
     if (mounted) {
+      // A different account signing in starts in its own main portal instead
+      // of inheriting the previous account's role.
+      final uid = AuthService.currentUser?.uid;
+      final sameUser = !_rolesLoaded || _rolesUid == uid;
+      _rolesUid = uid;
+      _rolesLoaded = true;
       setState(() {
         _userRoles = roles;
-        _currentRole = _roleFor(roles, preferred: _currentRole);
+        _currentRole = sameUser
+            ? _roleFor(roles, preferred: _currentRole)
+            : _roleFor(roles, preferred: null);
       });
+      RoleThemeController.setRole(_currentRole);
+      if (!sameUser && uid != null) AuthService.saveRole(_currentRole);
     }
   }
 
-  UserRole _roleFor(UserRoles roles, {required UserRole preferred}) {
+  UserRole _roleFor(UserRoles roles, {required UserRole? preferred}) {
     final available = <UserRole>[
       UserRole.patient,
       if (roles.isDoctor) UserRole.doctor,
       if (roles.isOperator) UserRole.operator,
       if (roles.isAdmin) UserRole.admin,
     ];
-    if (available.contains(preferred)) {
+    if (preferred != null && available.contains(preferred)) {
       return preferred;
     }
     if (roles.isAdmin) return UserRole.admin;
@@ -115,6 +127,7 @@ class MainShellState extends State<MainShell> {
         _currentIndex = 0;
       }
     });
+    RoleThemeController.setRole(role);
     AuthService.saveRole(role);
   }
 
@@ -331,7 +344,7 @@ class MainShellState extends State<MainShell> {
                 child: Material(
                   color: Colors.transparent,
                   child: InkWell(
-                    borderRadius: BorderRadius.circular(18),
+                    borderRadius: BorderRadius.circular(16),
                     onTap: () {
                       setState(() {
                         _currentIndex = index;
@@ -347,20 +360,23 @@ class MainShellState extends State<MainShell> {
                             size: 22,
                             color: isSelected
                                 ? currentTheme.colorScheme.primary
-                                : AppColors.textSecondary,
+                                : AppColors.textNav,
                           ),
                           const SizedBox(height: 3),
-                          Text(
-                            item.label,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: GoogleFonts.poppins(
-                              fontSize: 11,
-                              fontWeight:
-                                  isSelected ? FontWeight.w600 : FontWeight.w400,
-                              color: isSelected
-                                  ? currentTheme.colorScheme.primary
-                                  : AppColors.textSecondary,
+                          FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Text(
+                              item.label,
+                              maxLines: 1,
+                              style: GoogleFonts.poppins(
+                                fontSize: 11,
+                                fontWeight: isSelected
+                                    ? FontWeight.w600
+                                    : FontWeight.w400,
+                                color: isSelected
+                                    ? currentTheme.colorScheme.primary
+                                    : AppColors.textNav,
+                              ),
                             ),
                           ),
                         ],

@@ -7,6 +7,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/user_role.dart';
 import '../services/auth_service.dart';
 import '../services/firestore_service.dart';
+import '../widgets/user_avatar.dart';
+import '../widgets/state_views.dart';
 import '../widgets/profile_avatar_button.dart';
 import '../widgets/chamber_accessibility.dart';
 import '../theme/app_constants.dart';
@@ -160,14 +162,14 @@ class _DoctorManagerScreenState extends State<DoctorManagerScreen> {
               margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
               decoration: BoxDecoration(
                 color: Colors.white.withValues(alpha: 0.18),
-                borderRadius: BorderRadius.circular(22),
+                borderRadius: BorderRadius.circular(24),
               ),
               child: TabBar(
                 isScrollable: false,
                 indicatorSize: TabBarIndicatorSize.tab,
                 indicator: BoxDecoration(
                   color: Colors.white,
-                  borderRadius: BorderRadius.circular(22),
+                  borderRadius: BorderRadius.circular(24),
                 ),
                 labelColor: colorScheme.primary,
                 labelStyle: GoogleFonts.poppins(
@@ -343,7 +345,7 @@ class _DoctorManagerScreenState extends State<DoctorManagerScreen> {
                             style: TextStyle(fontSize: 11.5, color: AppColors.textSecondary),
                           ),
                           value: isAccessible,
-                          activeTrackColor: AppColors.primary,
+                          activeTrackColor: Theme.of(context).colorScheme.primary,
                           onChanged: (val) {
                             setDialogState(() {
                               isAccessible = val;
@@ -384,18 +386,18 @@ class _DoctorManagerScreenState extends State<DoctorManagerScreen> {
                                         feat,
                                         style: TextStyle(
                                           fontSize: 12,
-                                          color: isSelected ? Colors.white : AppColors.primary,
+                                          color: isSelected ? Colors.white : Theme.of(context).colorScheme.primary,
                                           fontWeight: FontWeight.w500,
                                         ),
                                       ),
                                       selected: isSelected,
-                                      selectedColor: AppColors.primary,
-                                      backgroundColor: AppColors.primaryTint,
+                                      selectedColor: Theme.of(context).colorScheme.primary,
+                                      backgroundColor: Theme.of(context).colorScheme.primaryContainer,
                                       checkmarkColor: Colors.white,
                                       shape: RoundedRectangleBorder(
                                         borderRadius: BorderRadius.circular(AppConstants.radiusChip),
                                         side: BorderSide(
-                                          color: isSelected ? AppColors.primary : AppColors.borderSubtle,
+                                          color: isSelected ? Theme.of(context).colorScheme.primary : AppColors.borderSubtle,
                                         ),
                                       ),
                                       onSelected: (selected) {
@@ -427,7 +429,7 @@ class _DoctorManagerScreenState extends State<DoctorManagerScreen> {
               ),
               FilledButton(
                 style: FilledButton.styleFrom(
-                  backgroundColor: AppColors.primary,
+                  backgroundColor: Theme.of(context).colorScheme.primary,
                   foregroundColor: Colors.white,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(AppConstants.radiusButton),
@@ -599,8 +601,8 @@ class _DoctorManagerScreenState extends State<DoctorManagerScreen> {
                     if (currentUser != null)
                       FilledButton.tonalIcon(
                         style: FilledButton.styleFrom(
-                          backgroundColor: AppColors.primaryTint,
-                          foregroundColor: AppColors.primary,
+                          backgroundColor: Theme.of(context).colorScheme.primaryContainer,
+                          foregroundColor: Theme.of(context).colorScheme.primary,
                         ),
                         onPressed: () {
                           setDialogState(() {
@@ -676,13 +678,7 @@ class _DoctorManagerScreenState extends State<DoctorManagerScreen> {
                             return ListTile(
                               dense: true,
                               visualDensity: VisualDensity.compact,
-                              leading: CircleAvatar(
-                                radius: 14,
-                                child: Text(
-                                  name.isNotEmpty ? name[0].toUpperCase() : 'U',
-                                  style: const TextStyle(fontSize: 12),
-                                ),
-                              ),
+                              leading: UserAvatar(uid: uid, name: name, radius: 14),
                               title: Text(name, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
                               subtitle: Text(
                                 uname.isNotEmpty ? '@$uname • $email' : email,
@@ -1163,17 +1159,7 @@ class _DoctorManagerScreenState extends State<DoctorManagerScreen> {
                       children: [
                         Row(
                           children: [
-                            CircleAvatar(
-                              radius: 18,
-                              backgroundColor: colorScheme.primary.withValues(alpha: 0.15),
-                              child: Text(
-                                applicantName.isNotEmpty ? applicantName[0].toUpperCase() : 'U',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  color: colorScheme.primary,
-                                ),
-                              ),
-                            ),
+                            UserAvatar(uid: applicantUid, name: applicantName, radius: 18),
                             const SizedBox(width: 10),
                             Expanded(
                               child: Column(
@@ -1195,7 +1181,7 @@ class _DoctorManagerScreenState extends State<DoctorManagerScreen> {
                               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                               decoration: BoxDecoration(
                                 color: Colors.blue.shade50,
-                                borderRadius: BorderRadius.circular(6),
+                                borderRadius: BorderRadius.circular(8),
                               ),
                               child: Text(
                                 chamberName,
@@ -1252,7 +1238,7 @@ class _DoctorManagerScreenState extends State<DoctorManagerScreen> {
                                     actions: [
                                       TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
                                       FilledButton(
-                                        style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                                        style: FilledButton.styleFrom(backgroundColor: AppColors.error),
                                         onPressed: () => Navigator.pop(c, true),
                                         child: const Text('Decline'),
                                       ),
@@ -1273,7 +1259,7 @@ class _DoctorManagerScreenState extends State<DoctorManagerScreen> {
                             const SizedBox(width: 8),
                             FilledButton.icon(
                               style: FilledButton.styleFrom(
-                                backgroundColor: const Color(0xFF16A34A),
+                                backgroundColor: AppColors.success,
                                 foregroundColor: Colors.white,
                                 visualDensity: VisualDensity.compact,
                                 padding: const EdgeInsets.symmetric(horizontal: 14),
@@ -1347,6 +1333,10 @@ class _DoctorManagerScreenState extends State<DoctorManagerScreen> {
     return StreamBuilder<List<Map<String, dynamic>>>(
       stream: FirestoreService.reviewsStream(docId),
       builder: (context, snapshot) {
+          if (snapshot.hasError) {
+            return ErrorStateView.fromError(snapshot.error,
+                what: 'reviews', onRetry: () => setState(() {}));
+          }
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
         }
@@ -1477,13 +1467,10 @@ class _DoctorManagerScreenState extends State<DoctorManagerScreen> {
                     children: [
                       Row(
                         children: [
-                          CircleAvatar(
+                          UserAvatar(
+                            uid: (r['userId'] ?? r['patientUid'])?.toString(),
+                            name: raterName,
                             radius: 14,
-                            backgroundColor: AppColors.primaryLight,
-                            child: Text(
-                              raterName.isNotEmpty ? raterName[0].toUpperCase() : 'P',
-                              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.primary),
-                            ),
                           ),
                           const SizedBox(width: 8),
                           Expanded(

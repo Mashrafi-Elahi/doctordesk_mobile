@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../widgets/user_avatar.dart';
+import '../models/doctor.dart';
 import '../models/user_role.dart';
 import '../services/auth_service.dart';
+import '../services/data_service.dart';
 import '../services/tts_service.dart';
 import '../theme/app_constants.dart';
 import '../widgets/auth_modal.dart';
@@ -30,11 +33,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _autoConfirmAppointments = false;
   String _language = 'English';
   String _consultationSlot = '20 mins';
+  Future<Doctor?>? _doctorFuture;
 
   @override
   void initState() {
     super.initState();
     _loadSettings();
+    final doctorId = AuthService.userRoles.doctorProfileId;
+    if (widget.role == UserRole.doctor &&
+        doctorId != null &&
+        doctorId.isNotEmpty) {
+      _doctorFuture = DataService.fetchDoctorById(doctorId)
+          .then<Doctor?>((d) => d)
+          .catchError((_) => null);
+    }
+  }
+
+  static bool _isVerified(Doctor? d) =>
+      d != null &&
+      (d.isBmdcVerified ||
+          d.verificationStatus == 'verified' ||
+          d.verificationStatus == 'checked_found');
+
+  static String _bmdcOf(Doctor? d) {
+    final reg = d?.bmdcRegNumber ?? d?.bmdcNumber;
+    return (reg == null || reg.trim().isEmpty) ? 'Not provided' : reg;
   }
 
   Future<void> _loadSettings() async {
@@ -64,8 +87,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
     final isSignedIn = AuthService.isSignedIn;
 
     final title = switch (widget.role) {
@@ -92,13 +113,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               padding: const EdgeInsets.all(16),
               child: Row(
                 children: [
-                  CircleAvatar(
-                    backgroundColor: colorScheme.primaryContainer,
-                    child: Icon(
-                      isSignedIn ? Icons.person : Icons.person_outline,
-                      color: colorScheme.onPrimaryContainer,
-                    ),
-                  ),
+                  const UserAvatar.me(radius: 22),
                   const SizedBox(width: 14),
                   Expanded(
                     child: Column(
@@ -147,19 +162,40 @@ class _SettingsScreenState extends State<SettingsScreen> {
             Card(
               child: Column(
                 children: [
-                  ListTile(
-                    leading: const Icon(Icons.verified, color: Colors.blue),
-                    title: const Text('BMDC Verification Status'),
-                    subtitle:
-                        const Text('BMDC Reg: A-84920 • Verified Specialist'),
-                    trailing: const Chip(
-                      label: Text('ACTIVE',
-                          style: TextStyle(fontSize: 10, color: Colors.white)),
-                      backgroundColor: Colors.green,
-                      visualDensity: VisualDensity.compact,
-                    ),
-                    onTap: () {
-                      _showBmdcDetailsDialog(context);
+                  FutureBuilder<Doctor?>(
+                    future: _doctorFuture,
+                    builder: (context, snap) {
+                      final doctor = snap.data;
+                      final loading =
+                          snap.connectionState == ConnectionState.waiting;
+                      final verified = _isVerified(doctor);
+                      return ListTile(
+                        leading: Icon(
+                            verified ? Icons.verified : Icons.pending_outlined,
+                            color: verified
+                                ? AppColors.success
+                                : AppColors.textSecondary),
+                        title: const Text('BMDC Verification Status'),
+                        subtitle: Text(loading
+                            ? 'Loading…'
+                            : doctor == null
+                                ? 'No linked doctor profile'
+                                : 'BMDC Reg: ${_bmdcOf(doctor)}'),
+                        trailing: loading
+                            ? null
+                            : Chip(
+                                label: Text(verified ? 'VERIFIED' : 'PENDING',
+                                    style: const TextStyle(
+                                        fontSize: 10, color: Colors.white)),
+                                backgroundColor: verified
+                                    ? AppColors.success
+                                    : AppColors.textSecondary,
+                                visualDensity: VisualDensity.compact,
+                              ),
+                        onTap: doctor == null
+                            ? null
+                            : () => _showBmdcDetailsDialog(context, doctor),
+                      );
                     },
                   ),
                   const Divider(height: 1),
@@ -357,33 +393,39 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  void _showBmdcDetailsDialog(BuildContext context) {
+  void _showBmdcDetailsDialog(BuildContext context, Doctor doctor) {
+    final verified = _isVerified(doctor);
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Row(
+        title: Row(
           children: [
-            Icon(Icons.verified, color: Colors.blue),
-            SizedBox(width: 8),
-            Text('BMDC Verification'),
+            Icon(verified ? Icons.verified : Icons.pending_outlined,
+                color: verified ? AppColors.success : AppColors.textSecondary),
+            const SizedBox(width: 8),
+            const Text('BMDC Verification'),
           ],
         ),
-        content: const Column(
+        content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Doctor Name: Dr. Rafiqul Islam',
-                style: TextStyle(fontWeight: FontWeight.bold)),
-            SizedBox(height: 4),
-            Text('BMDC Registration: A-84920'),
-            SizedBox(height: 4),
-            Text('Qualification: MBBS, FCPS (Medicine)'),
-            SizedBox(height: 4),
-            Text('Verification Level: Level 3 Verified Specialist'),
-            SizedBox(height: 8),
+            Text('Doctor Name: ${doctor.name}',
+                style: const TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 4),
+            Text('BMDC Registration: ${_bmdcOf(doctor)}'),
+            if (doctor.education.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text('Qualification: ${doctor.education.join(', ')}'),
+            ],
+            const SizedBox(height: 4),
+            Text('Status: ${verified ? 'Verified by admin review' : 'Awaiting admin review'}'),
+            const SizedBox(height: 8),
             Text(
-              'Your profile displays the verified doctor badge on directory searches and appointment schedules.',
-              style: TextStyle(fontSize: 12, color: Colors.grey),
+              verified
+                  ? 'Your profile shows the verified badge in directory search and on appointments.'
+                  : 'The verified badge appears once an admin checks your registration against the BM&DC register.',
+              style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
             ),
           ],
         ),

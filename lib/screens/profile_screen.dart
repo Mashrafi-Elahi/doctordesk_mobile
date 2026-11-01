@@ -5,6 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import '../widgets/user_avatar.dart';
 import '../theme/app_constants.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_role_and_nav.dart';
@@ -621,19 +622,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             Center(
               child: Column(
                 children: [
-                  CircleAvatar(
-                    radius: 48,
-                    backgroundColor: AppColors.primaryTint,
-                    child: Icon(
-                      widget.role == UserRole.doctor
-                          ? Icons.local_hospital_outlined
-                          : widget.role == UserRole.operator
-                              ? Icons.business_outlined
-                              : Icons.person,
-                      size: 48,
-                      color: AppColors.primary,
-                    ),
-                  ),
+                  const UserAvatar.me(radius: 48),
                   const SizedBox(height: 12),
                   Text(
                     _getRoleDisplayName(),
@@ -767,11 +756,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     padding: const EdgeInsets.all(AppConstants.screenPadding),
                     child: Row(
                       children: [
-                        const CircleAvatar(
+                        CircleAvatar(
                           radius: 20,
-                          backgroundColor: AppColors.primaryTint,
+                          backgroundColor: Theme.of(context).colorScheme.primaryContainer,
                           child: Icon(Icons.medical_services_outlined,
-                              color: AppColors.primary, size: 20),
+                              color: Theme.of(context).colorScheme.primary, size: 20),
                         ),
                         const SizedBox(width: 12),
                         Expanded(
@@ -790,7 +779,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         const SizedBox(width: 8),
                         FilledButton(
                           style: FilledButton.styleFrom(
-                            backgroundColor: AppColors.primary,
+                            backgroundColor: Theme.of(context).colorScheme.primary,
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(
                                   AppConstants.radiusButton),
@@ -824,7 +813,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             child: Container(
                               padding: const EdgeInsets.all(12),
                               decoration: BoxDecoration(
-                                color: AppColors.primaryTint,
+                                color: Theme.of(context).colorScheme.primaryContainer,
                                 borderRadius: BorderRadius.circular(12),
                               ),
                               child: Column(
@@ -837,7 +826,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                     style: GoogleFonts.poppins(
                                       fontSize: 18,
                                       fontWeight: FontWeight.bold,
-                                      color: AppColors.primary,
+                                      color: Theme.of(context).colorScheme.primary,
                                     ),
                                   ),
                                 ],
@@ -849,7 +838,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             child: Container(
                               padding: const EdgeInsets.all(12),
                               decoration: BoxDecoration(
-                                color: AppColors.primaryTint,
+                                color: Theme.of(context).colorScheme.primaryContainer,
                                 borderRadius: BorderRadius.circular(12),
                               ),
                               child: Column(
@@ -863,7 +852,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                     style: GoogleFonts.poppins(
                                       fontSize: 18,
                                       fontWeight: FontWeight.bold,
-                                      color: AppColors.primary,
+                                      color: Theme.of(context).colorScheme.primary,
                                     ),
                                   ),
                                 ],
@@ -877,7 +866,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         width: double.infinity,
                         child: FilledButton(
                           style: FilledButton.styleFrom(
-                            backgroundColor: AppColors.primary,
+                            backgroundColor: Theme.of(context).colorScheme.primary,
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(
                                   AppConstants.radiusButton),
@@ -927,14 +916,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             return Container(
                               padding: const EdgeInsets.all(16),
                               decoration: BoxDecoration(
-                                color: AppColors.primaryTint,
+                                color: Theme.of(context).colorScheme.primaryContainer,
                                 borderRadius: BorderRadius.circular(12),
                               ),
-                              child: const Row(
+                              child: Row(
                                 children: [
-                                  Icon(Icons.info_outline, color: AppColors.primary),
-                                  SizedBox(width: 10),
-                                  Expanded(
+                                  Icon(Icons.info_outline, color: Theme.of(context).colorScheme.primary),
+                                  const SizedBox(width: 10),
+                                  const Expanded(
                                     child: Text(
                                       'No chambers assigned yet. Please contact an administrator to be assigned to clinic desks.',
                                       style: TextStyle(fontSize: 12.5),
@@ -966,7 +955,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                 margin: const EdgeInsets.only(bottom: 16),
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(14),
-                                  side: BorderSide(color: AppColors.primary.withValues(alpha: 0.18)),
+                                  side: BorderSide(color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.18)),
                                 ),
                                 child: Padding(
                                   padding: const EdgeInsets.all(14),
@@ -976,10 +965,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                       // Chamber Header Row
                                       Row(
                                         children: [
-                                          const CircleAvatar(
+                                          CircleAvatar(
                                             radius: 18,
-                                            backgroundColor: AppColors.primary,
-                                            child: Icon(Icons.business_outlined, color: Colors.white, size: 18),
+                                            backgroundColor: Theme.of(context).colorScheme.primary,
+                                            child: const Icon(Icons.business_outlined, color: Colors.white, size: 18),
                                           ),
                                           const SizedBox(width: 10),
                                           Expanded(
@@ -991,7 +980,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                                   style: GoogleFonts.poppins(
                                                     fontSize: 14.5,
                                                     fontWeight: FontWeight.w700,
-                                                    color: AppColors.primary,
+                                                    color: Theme.of(context).colorScheme.primary,
                                                   ),
                                                 ),
                                                 Text(
@@ -1022,7 +1011,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                               padding: const EdgeInsets.all(12),
                                               decoration: BoxDecoration(
                                                 color: Colors.grey.shade50,
-                                                borderRadius: BorderRadius.circular(10),
+                                                borderRadius: BorderRadius.circular(12),
                                               ),
                                               child: Row(
                                                 children: [
@@ -1040,7 +1029,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                                       Navigator.push(
                                                         context,
                                                         MaterialPageRoute(
-                                                          builder: (_) => OperatorDeskScreen(chamberId: chamberId),
+                                                          // The desk list knows each chamber's doctor, which the
+                                                          // chamber-scoped queries need.
+                                                          builder: (_) => const OperatorDeskScreen(),
                                                         ),
                                                       );
                                                     },
@@ -1062,9 +1053,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                                 margin: const EdgeInsets.only(bottom: 8),
                                                 padding: const EdgeInsets.all(12),
                                                 decoration: BoxDecoration(
-                                                  color: AppColors.primaryTint.withValues(alpha: 0.5),
-                                                  borderRadius: BorderRadius.circular(10),
-                                                  border: Border.all(color: AppColors.primary.withValues(alpha: 0.1)),
+                                                  color: Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.5),
+                                                  borderRadius: BorderRadius.circular(12),
+                                                  border: Border.all(color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.1)),
                                                 ),
                                                 child: Row(
                                                   children: [
@@ -1104,7 +1095,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                                       crossAxisAlignment: CrossAxisAlignment.end,
                                                       children: [
                                                         StreamBuilder<int>(
-                                                          stream: DataService.streamTodayWaitingCount(chamberId),
+                                                          stream: DataService.streamTodayWaitingCount(
+                                                            chamberId,
+                                                            doctorId: docInfo['doctorId']?.toString(),
+                                                          ),
                                                           builder: (ctx, countSnap) {
                                                             final count = countSnap.data ?? 0;
                                                             return Container(
@@ -1138,7 +1132,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                                             Navigator.push(
                                                               context,
                                                               MaterialPageRoute(
-                                                                builder: (_) => OperatorDeskScreen(chamberId: chamberId),
+                                                                builder: (_) => OperatorDeskScreen(
+                                                                  chamberId: chamberId,
+                                                                  doctorId: docInfo['doctorId']?.toString(),
+                                                                ),
                                                               ),
                                                             );
                                                           },
@@ -1239,7 +1236,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               Material(
                 color: Colors.transparent,
                 child: ListTile(
-                  leading: Icon(item.icon, color: AppColors.primary, size: 22),
+                  leading: Icon(item.icon, color: Theme.of(context).colorScheme.primary, size: 22),
                   title: Text(
                     item.title,
                     style: GoogleFonts.poppins(
@@ -1254,11 +1251,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 ),
               ),
               if (!isLast)
-                const Divider(
+                Divider(
                   height: 1,
                   indent: 56,
                   endIndent: 16,
-                  color: AppColors.primaryTint,
+                  color: Theme.of(context).colorScheme.primaryContainer,
                 ),
             ],
           );

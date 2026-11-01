@@ -4,6 +4,7 @@ import '../models/doctor.dart';
 import '../services/api_service.dart';
 import '../services/auth_service.dart';
 import 'doctor_detail_screen.dart';
+import '../widgets/user_avatar.dart';
 import '../widgets/chamber_accessibility.dart';
 
 class DoctorsScreen extends StatefulWidget {
@@ -286,7 +287,7 @@ class _DoctorsScreenState extends State<DoctorsScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
             decoration: BoxDecoration(
               color: Colors.amber.shade50,
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: BorderRadius.circular(12),
               border: Border.all(color: Colors.amber.shade300),
             ),
             child: Row(
@@ -365,17 +366,10 @@ class _DoctorListCard extends StatelessWidget {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              CircleAvatar(
+              UserAvatar(
+                uid: doctor.claimedByUid,
+                name: doctor.name,
                 radius: 30,
-                backgroundColor: colorScheme.primaryContainer,
-                child: Text(
-                  doctor.name.isNotEmpty ? doctor.name[0].toUpperCase() : '?',
-                  style: TextStyle(
-                    fontSize: 24,
-                    color: colorScheme.onPrimaryContainer,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
               ),
               const SizedBox(width: 16),
               Expanded(
@@ -401,7 +395,7 @@ class _DoctorListCard extends StatelessWidget {
                             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                             decoration: BoxDecoration(
                               color: colorScheme.primary.withValues(alpha: 0.15),
-                              borderRadius: BorderRadius.circular(6),
+                              borderRadius: BorderRadius.circular(8),
                             ),
                             child: Text(
                               'Your profile',
@@ -434,7 +428,7 @@ class _DoctorListCard extends StatelessWidget {
                             padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
                             decoration: BoxDecoration(
                               color: Colors.grey.shade100,
-                              borderRadius: BorderRadius.circular(6),
+                              borderRadius: BorderRadius.circular(8),
                               border: Border.all(color: Colors.grey.shade300),
                             ),
                             child: const Row(

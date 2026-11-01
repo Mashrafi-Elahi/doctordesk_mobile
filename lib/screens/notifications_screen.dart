@@ -5,6 +5,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import '../widgets/state_views.dart';
 import '../services/notification_service.dart';
 import '../services/auth_service.dart';
 import 'appointment_screen.dart';
@@ -59,8 +60,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
 
   Color _colorForType(String type) => switch (type) {
         'comment' => const Color(0xFF0288D1),
-        'chat_message' || 'chat_unlock' => AppColors.primary,
-        'appointment' || 'appointment_confirmed' || 'appointment_requested' => AppColors.primary,
+        'chat_message' || 'chat_unlock' => Theme.of(context).colorScheme.primary,
+        'appointment' || 'appointment_confirmed' || 'appointment_requested' => Theme.of(context).colorScheme.primary,
         'review' => AppColors.star,
         _ => Colors.blueGrey,
       };
@@ -132,6 +133,10 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       body: StreamBuilder<List<AppNotification>>(
         stream: NotificationService.notificationsStream(_userId),
         builder: (context, snapshot) {
+          if (snapshot.hasError) {
+            return ErrorStateView.fromError(snapshot.error,
+                what: 'notifications', onRetry: () => setState(() {}));
+          }
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
           }
@@ -242,8 +247,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                       ? Container(
                           width: 8,
                           height: 8,
-                          decoration: const BoxDecoration(
-                            color: AppColors.primary,
+                          decoration: BoxDecoration(
+                            color: Theme.of(context).colorScheme.primary,
                             shape: BoxShape.circle,
                           ),
                         )

@@ -44,3 +44,9 @@ flutter:
     - assets/images/
     - assets/dhaka_places.json
     - assets/data/
+
+dependency_overrides:
+  # youtube_player_flutter 9.x pulls in flutter_inappwebview 6.1.5, whose Android plugin
+  # uses getDefaultProguardFile('proguard-android.txt'), which AGP 9 rejects.
+  # 6.2.0-beta.3 is the first release with the fix; drop this once 6.2.0 is stable.
+  flutter_inappwebview: 6.2.0-beta.3

@@ -377,6 +377,9 @@ class _NearbyDoctorsScreenState extends State<NearbyDoctorsScreen> {
 
   String? _formatDistance(double? km) {
     if (km == null) return null;
+    // Bundled chambers are geocoded to area centres, so a chamber in the
+    // searched area lands exactly on it; "0 m away" would be misleading.
+    if (km < 0.05) return 'In your area';
     if (km < 1.0) {
       return '${(km * 1000).round()} m away';
     }
@@ -536,10 +539,12 @@ class _NearbyDoctorsScreenState extends State<NearbyDoctorsScreen> {
                       margin: const EdgeInsets.only(top: 4),
                       decoration: BoxDecoration(
                         color: Colors.white,
-                        borderRadius: BorderRadius.circular(10),
+                        borderRadius: BorderRadius.circular(12),
                         border: Border.all(color: Colors.grey.shade200),
                       ),
-                      child: Column(
+                      child: Material(
+                        color: Colors.transparent,
+                        child: Column(
                         children: _suggestions.map((suggestion) {
                           return ListTile(
                             dense: true,
@@ -554,6 +559,7 @@ class _NearbyDoctorsScreenState extends State<NearbyDoctorsScreen> {
                             onTap: () => _selectSuggestion(suggestion),
                           );
                         }).toList(),
+                        ),
                       ),
                     ),
                   if (_suggestionError != null)

@@ -19,6 +19,7 @@ class ChatService {
     required String patientName,
     String? doctorId,
     required String unlockedBy,
+    String? chamberId,
     int followupDays = 7,
     int followupMaxMessages = 20,
   }) async {
@@ -46,8 +47,10 @@ class ChatService {
       'messageLimit': followupMaxMessages,
       'messageCount': 0,
       'unlockedBy': unlockedBy,
+      // Lets the rules check an operator is assigned to this doctor's chamber.
+      if (chamberId != null && chamberId.isNotEmpty) 'unlockChamberId': chamberId,
       'lastMessage': 'Consultation completed. Follow-up chat unlocked for $followupDays days.',
-      'createdAt': FieldValue.serverTimestamp(),
+      'unlockedAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
 
@@ -55,7 +58,8 @@ class ChatService {
       await NotificationService.createNotification(
         userId: patientUid,
         title: 'Follow-up Chat Unlocked 💬',
-        body: 'Dr. $doctorName has unlocked follow-up chat for $followupDays days.',
+        body: '${doctorName.toLowerCase().startsWith('dr') ? doctorName : 'Dr. $doctorName'} '
+            'has unlocked follow-up chat for $followupDays days.',
         type: 'chat_unlock',
         relatedId: chatId,
       );

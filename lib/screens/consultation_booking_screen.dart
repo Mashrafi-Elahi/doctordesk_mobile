@@ -214,7 +214,7 @@ class _ConsultationBookingScreenState extends State<ConsultationBookingScreen> {
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                             decoration: BoxDecoration(
-                              color: AppColors.primaryLight,
+                              color: Theme.of(context).colorScheme.primaryContainer,
                               borderRadius: BorderRadius.circular(12),
                             ),
                             child: Text(
@@ -222,7 +222,7 @@ class _ConsultationBookingScreenState extends State<ConsultationBookingScreen> {
                               style: GoogleFonts.poppins(
                                 fontWeight: FontWeight.bold,
                                 fontSize: 14,
-                                color: AppColors.primaryDark,
+                                color: Theme.of(context).colorScheme.onPrimaryContainer,
                               ),
                             ),
                           ),

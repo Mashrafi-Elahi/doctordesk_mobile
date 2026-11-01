@@ -72,6 +72,124 @@ after(async () => {
   await testEnv.cleanup();
 });
 
+describe('user document creation', () => {
+  const signupDoc = (extra = {}) => ({
+    uid: 'newcomer',
+    email: 'new@example.com',
+    roles: { isDoctor: false, isOperator: false, isAdmin: false },
+    doctorProfileId: null,
+    operatorAssignments: [],
+    ...extra,
+  });
+
+  it('allows a normal sign-up document', async () => {
+    const db = testEnv.authenticatedContext('newcomer').firestore();
+    await assertSucceeds(setDoc(doc(db, 'users/newcomer'), signupDoc()));
+  });
+
+  it('prevents a new account from linking itself to a doctor profile', async () => {
+    const db = testEnv.authenticatedContext('newcomer').firestore();
+    await assertFails(setDoc(doc(db, 'users/newcomer'), signupDoc({ doctorProfileId: 'doctor-profile' })));
+  });
+
+  it('prevents a new account from assigning itself to a chamber or moderator role', async () => {
+    const db = testEnv.authenticatedContext('newcomer').firestore();
+    await assertFails(setDoc(doc(db, 'users/newcomer'), signupDoc({ operatorAssignments: ['chamber-1'] })));
+    await assertFails(setDoc(doc(db, 'users/newcomer'), signupDoc({
+      roles: { isDoctor: false, isOperator: false, isAdmin: false, isModerator: true },
+    })));
+  });
+});
+
+describe('follow-up chat unlock', () => {
+  const chatDoc = (extra = {}) => ({
+    participants: ['patient', 'doctor'],
+    participantRoles: { patient: 'Patient', doctor: 'Doctor' },
+    participantNames: { patient: 'P', doctor: 'D' },
+    doctorUid: 'doctor',
+    patientUid: 'patient',
+    doctorName: 'D',
+    patientName: 'P',
+    doctorId: 'doctor-profile',
+    status: 'active',
+    expiresAt: new Date(Date.now() + 7 * 864e5),
+    messageLimit: 20,
+    messageCount: 0,
+    unlockedBy: 'appt-1',
+    lastMessage: 'unlocked',
+    updatedAt: new Date(),
+    ...extra,
+  });
+  const seedExpiredChat = () => testEnv.withSecurityRulesDisabled(async (c) => {
+    await setDoc(doc(c.firestore(), 'chats/patient_doctor'), chatDoc({
+      status: 'expired',
+      messageCount: 20,
+      unlockedBy: 'appt-0',
+      expiresAt: new Date(Date.now() - 864e5),
+    }));
+  });
+
+  it('lets the doctor open a chat after the first visit', async () => {
+    const db = testEnv.authenticatedContext('doctor').firestore();
+    await assertSucceeds(setDoc(doc(db, 'chats/patient_doctor'), chatDoc(), { merge: true }));
+  });
+
+  it('lets the doctor re-open the chat for a returning patient', async () => {
+    await seedExpiredChat();
+    const db = testEnv.authenticatedContext('doctor').firestore();
+    await assertSucceeds(setDoc(doc(db, 'chats/patient_doctor'), chatDoc({ unlockedBy: 'appt-2' }), { merge: true }));
+  });
+
+  it('lets an assigned operator open and re-open the chat for their chamber', async () => {
+    const db = testEnv.authenticatedContext('operator').firestore();
+    await assertSucceeds(setDoc(doc(db, 'chats/patient_doctor'),
+      chatDoc({ unlockChamberId: 'chamber-a' }), { merge: true }));
+    await seedExpiredChat();
+    await assertSucceeds(setDoc(doc(db, 'chats/patient_doctor'),
+      chatDoc({ unlockChamberId: 'chamber-a', unlockedBy: 'appt-3' }), { merge: true }));
+  });
+
+  it('lets an assigned operator create the chats made on Accept (chamberId)', async () => {
+    const db = testEnv.authenticatedContext('operator').firestore();
+    await assertSucceeds(setDoc(doc(db, 'chats/chat_appt9_patient_doctor'),
+      chatDoc({ chamberId: 'chamber-a', appointmentId: 'appt9', createdAt: new Date() }), { merge: true }));
+    await assertSucceeds(setDoc(doc(db, 'chats/chat_appt9_patient_operator'), chatDoc({
+      participants: ['patient', 'operator'],
+      operatorUid: 'operator',
+      chamberId: 'chamber-a',
+      appointmentId: 'appt9',
+      createdAt: new Date(),
+    }), { merge: true }));
+  });
+
+  it('refuses an operator who is not assigned to that chamber', async () => {
+    const db = testEnv.authenticatedContext('operator').firestore();
+    await assertFails(setDoc(doc(db, 'chats/patient_doctor'),
+      chatDoc({ unlockChamberId: 'chamber-z' }), { merge: true }));
+  });
+
+  it('refuses a different doctor and the patient', async () => {
+    await testEnv.withSecurityRulesDisabled(async (c) => {
+      await setDoc(doc(c.firestore(), 'users/other-doctor'), {
+        roles: { isDoctor: true },
+        doctorProfileId: 'other-profile',
+      });
+    });
+    const other = testEnv.authenticatedContext('other-doctor').firestore();
+    await assertFails(setDoc(doc(other, 'chats/patient_doctor'), chatDoc(), { merge: true }));
+    await seedExpiredChat();
+    const patient = testEnv.authenticatedContext('patient').firestore();
+    await assertFails(setDoc(doc(patient, 'chats/patient_doctor'), chatDoc({ unlockedBy: 'self' }), { merge: true }));
+  });
+
+  it('never lets a re-open change who is in the chat', async () => {
+    await seedExpiredChat();
+    const db = testEnv.authenticatedContext('doctor').firestore();
+    await assertFails(setDoc(doc(db, 'chats/patient_doctor'),
+      chatDoc({ participants: ['patient', 'doctor', 'stranger'] }), { merge: true }));
+  });
+});
+
 describe('appointment authorization', () => {
   it('allows a patient to request another doctor', async () => {
     const db = testEnv.authenticatedContext('patient').firestore();

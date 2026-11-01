@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'user_avatar.dart';
 import '../models/user_role.dart';
 import '../services/auth_service.dart';
 import '../screens/settings_screen.dart';
@@ -53,7 +54,6 @@ class AppDrawer extends StatelessWidget {
     final colorScheme = Theme.of(context).colorScheme;
     final displayName = _getDisplayName();
     final emailOrSubtitle = _getEmailOrSubtitle();
-    final avatarInitial = displayName.isNotEmpty ? displayName[0].toUpperCase() : 'U';
 
     return Drawer(
       child: Column(
@@ -76,17 +76,7 @@ class AppDrawer extends StatelessWidget {
                 ),
               ),
             ],
-            currentAccountPicture: CircleAvatar(
-              backgroundColor: colorScheme.onPrimary,
-              child: Text(
-                avatarInitial,
-                style: TextStyle(
-                  fontSize: 24.0,
-                  fontWeight: FontWeight.bold,
-                  color: colorScheme.primary,
-                ),
-              ),
-            ),
+            currentAccountPicture: const UserAvatar.me(radius: 36, ring: true),
           ),
           ListTile(
             leading: const Icon(Icons.home_outlined),
