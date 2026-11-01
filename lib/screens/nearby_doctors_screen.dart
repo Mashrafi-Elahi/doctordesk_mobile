@@ -4,6 +4,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/doctor.dart';
 import '../services/api_service.dart';
+import '../services/device_location.dart';
 import '../services/location_search_service.dart';
 import 'doctor_detail_screen.dart';
 import '../widgets/chamber_accessibility.dart';
@@ -94,8 +95,11 @@ class _NearbyDoctorsScreenState extends State<NearbyDoctorsScreen> {
       setState(() {
         _lat = lat;
         _lng = lng;
-        _locationLabel =
-            area == null || area.isEmpty ? 'Saved area' : '$area, Dhaka';
+        _locationLabel = area == null || area.isEmpty
+            ? 'Saved area'
+            : (area == _deviceLocationLabel || area.toLowerCase().contains('dhaka'))
+                ? area
+                : '$area, Dhaka';
         _selectedAreaFilter = matchedFilter;
       });
       await _searchNearby();
@@ -162,30 +166,14 @@ class _NearbyDoctorsScreenState extends State<NearbyDoctorsScreen> {
         }
       }
 
-      // Emulators frequently have a permission grant but no fresh GPS fix.
-      // Reuse the last Android location while waiting for a new one so a
-      // granted permission can still produce a useful nearby search.
-      Position? lastKnownPosition = await Geolocator.getLastKnownPosition();
-      Position position;
-      try {
-        position = await Geolocator.getCurrentPosition(
-          locationSettings: const LocationSettings(
-            accuracy: LocationAccuracy.medium,
-            timeLimit: Duration(seconds: 20),
-          ),
-        );
-      } catch (_) {
-        if (lastKnownPosition == null) rethrow;
-        position = lastKnownPosition;
-      }
-
-      if (position.latitude == 0 && position.longitude == 0) {
-        throw StateError('Device returned an invalid location.');
-      }
+      final position = await DeviceLocation.current();
 
       _lat = position.latitude;
       _lng = position.longitude;
-      _locationLabel = 'Your current location';
+      _locationLabel = _deviceLocationLabel;
+      // Distance decides "near" now; a leftover area filter would keep showing
+      // the previously picked area's doctors whatever the distance.
+      _selectedAreaFilter = null;
       _showManualInput = false;
       await _persistLocation(
         label: _locationLabel!,
@@ -194,10 +182,13 @@ class _NearbyDoctorsScreenState extends State<NearbyDoctorsScreen> {
       );
       await _searchNearby();
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _isLoading = false;
         _showManualInput = true;
-        _error = 'Unable to get location. Please enter your address manually.';
+        _error = e is DeviceLocationException
+            ? e.message
+            : 'Unable to get location. Please pick your area.';
       });
     }
   }
@@ -341,6 +332,8 @@ class _NearbyDoctorsScreenState extends State<NearbyDoctorsScreen> {
     await _searchNearby();
   }
 
+  static const _deviceLocationLabel = 'Your current location';
+
   Future<void> _persistLocation({
     required String label,
     required double lat,
@@ -394,6 +387,16 @@ class _NearbyDoctorsScreenState extends State<NearbyDoctorsScreen> {
           shrinkWrap: true,
           children: [
             const ListTile(title: Text('Change location', style: TextStyle(fontWeight: FontWeight.w700))),
+            ListTile(
+              leading: const Icon(Icons.my_location_outlined),
+              title: const Text('Use device location'),
+              subtitle: const Text('Doctors within 6 km of you'),
+              onTap: () async {
+                Navigator.pop(context);
+                await _requestLocationAndSearch();
+              },
+            ),
+            const Divider(height: 1),
             ...availableDoctorLocations.map(
               (location) => ListTile(
                 leading: const Icon(Icons.location_on_outlined),
@@ -403,14 +406,6 @@ class _NearbyDoctorsScreenState extends State<NearbyDoctorsScreen> {
                   await _selectAvailableLocation(location);
                 },
               ),
-            ),
-            ListTile(
-              leading: const Icon(Icons.my_location_outlined),
-              title: const Text('Use device location'),
-              onTap: () async {
-                Navigator.pop(context);
-                await _requestLocationAndSearch();
-              },
             ),
           ],
         ),
@@ -485,12 +480,14 @@ class _NearbyDoctorsScreenState extends State<NearbyDoctorsScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (_error != null && _doctors.isEmpty)
+                  // Shown even over an older list, so a failed device
+                  // location never looks like it silently worked.
+                  if (_error != null && (_doctors.isEmpty || _showManualInput))
                     Padding(
                       padding: const EdgeInsets.only(bottom: 12),
                       child: Text(
                         _error!,
-                        style: TextStyle(color: Colors.grey[600], fontSize: 13),
+                        style: TextStyle(color: Colors.red.shade700, fontSize: 13, fontWeight: FontWeight.w600),
                       ),
                     ),
                   TextField(

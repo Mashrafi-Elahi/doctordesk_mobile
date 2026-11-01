@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:geolocator/geolocator.dart';
+import '../services/device_location.dart';
 import '../services/api_service.dart';
 import '../services/dhaka_locations.dart';
 
@@ -101,13 +102,10 @@ class _FirstTimeCheckinContentState extends State<_FirstTimeCheckinContent> {
         return;
       }
 
-      final pos = await Geolocator.getCurrentPosition(
-        locationSettings:
-            const LocationSettings(accuracy: LocationAccuracy.medium),
-      );
+      final pos = await DeviceLocation.current();
 
       setState(() {
-        _selectedArea = 'Current GPS Location';
+        _selectedArea = 'Your current location';
         _selectedLat = pos.latitude;
         _selectedLng = pos.longitude;
         _detectingGps = false;
@@ -116,7 +114,7 @@ class _FirstTimeCheckinContentState extends State<_FirstTimeCheckinContent> {
     } catch (e) {
       setState(() {
         _detectingGps = false;
-        _gpsMessage = 'Could not detect GPS location.';
+        _gpsMessage = e is DeviceLocationException ? e.message : 'Could not detect GPS location.';
       });
     }
   }
