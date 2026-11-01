@@ -84,6 +84,50 @@ class FirestoreService {
   /// Fetches doctors with pagination. Firestore `doctors` is the primary source of truth.
   /// Uses cursor-based pagination (startAfterDocument). If offline or Firestore fails,
   /// falls back to local cache and bundled list, merging by doctor ID (Firestore wins).
+  static Future<List<Doctor>>? _claimedDoctors;
+  static DateTime _claimedDoctorsAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// Every claimed (bookable) doctor. Few enough to load in one query, and
+  /// needed so they can lead page 1 instead of sitting wherever their name
+  /// sorts in the paginated list.
+  static Future<List<Doctor>> _loadClaimedDoctors() {
+    if (_claimedDoctors == null ||
+        DateTime.now().difference(_claimedDoctorsAt) > const Duration(minutes: 5)) {
+      _claimedDoctorsAt = DateTime.now();
+      _claimedDoctors = _db
+          .collection('doctors')
+          // isNotEqualTo: null is ignored by the Dart SDK; any non-empty
+          // string sorts after ''.
+          .where('claimedByUid', isGreaterThan: '')
+          .limit(300)
+          .get()
+          .then((snap) => snap.docs.map((d) {
+                final data = Map<String, dynamic>.from(d.data());
+                data['_id'] = d.id;
+                data['id'] = d.id;
+                return Doctor.fromJson(data);
+              }).where((d) => !d.isHidden && !d.isDeleted && d.isClaimedProfile).toList())
+          .catchError((Object e) {
+        debugPrint('Claimed doctors query failed: $e');
+        _claimedDoctors = null;
+        return <Doctor>[];
+      });
+    }
+    return _claimedDoctors!;
+  }
+
+  /// Claimed doctors matching the current filter/search, best first.
+  static Future<List<Doctor>> _claimedMatches(String search, String? speciality) async {
+    final claimed = await _loadClaimedDoctors();
+    var matches = claimed.where((d) =>
+        speciality == null || _matchesSpecialtyFilter(d.specialities, speciality)).toList();
+    if (search.isNotEmpty) {
+      final ranked = DoctorSearchIndex.rank(matches.map((d) => d.toJson()), search);
+      matches = ranked.map(Doctor.fromJson).toList();
+    }
+    return Doctor.sortForListing(matches);
+  }
+
   static Future<Map<String, dynamic>> fetchDoctors({
     int page = 1,
     int limit = 20,
@@ -141,11 +185,18 @@ class FirestoreService {
         }).where((d) => !d.isHidden && !d.isDeleted).toList();
 
         List<Doctor> resultDocs = firestoreDoctors;
-        if (normSearch.isNotEmpty && normSpec != null) {
+        if (normSearch.isNotEmpty) {
           final rawMaps = firestoreDoctors.map((d) => d.toJson()).toList();
           final ranked = DoctorSearchIndex.rank(rawMaps, normSearch);
           resultDocs = ranked.map(Doctor.fromJson).toList();
         }
+
+        // Claimed doctors lead page 1 and are left out of later pages.
+        final claimed = await _claimedMatches(normSearch, normSpec);
+        final claimedIds = claimed.map((d) => d.id).toSet();
+        resultDocs = Doctor.sortForListing(
+            resultDocs.where((d) => !claimedIds.contains(d.id)));
+        if (page == 1) resultDocs = [...claimed, ...resultDocs];
 
         if (page == 1 && normSearch.isEmpty && normSpec == null) {
           _cacheDiscoveryDoctorsLocally(resultDocs);
@@ -252,14 +303,13 @@ class FirestoreService {
       records = DoctorSearchIndex.rank(records, search!.trim());
     }
 
-    final totalCount = records.length;
+    final all = Doctor.sortForListing(records.map(Doctor.fromJson));
+    final totalCount = all.length;
     final totalPages = (totalCount / limit).ceil().clamp(1, 9999);
     final startIndex = (page - 1) * limit;
-    final pagedRecords = startIndex < totalCount
-        ? records.sublist(startIndex, (startIndex + limit).clamp(0, totalCount))
-        : <Map<String, dynamic>>[];
-
-    final doctors = pagedRecords.map(Doctor.fromJson).toList();
+    final doctors = startIndex < totalCount
+        ? all.sublist(startIndex, (startIndex + limit).clamp(0, totalCount))
+        : <Doctor>[];
 
     return {
       'doctors': doctors,
@@ -620,7 +670,7 @@ class FirestoreService {
       }
 
       list.sort((a, b) => (a.distance ?? 999.0).compareTo(b.distance ?? 999.0));
-      return list;
+      return Doctor.sortForListing(list);
     });
 
     final startIndex = (page - 1) * limit;

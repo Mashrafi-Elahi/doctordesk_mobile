@@ -8,6 +8,7 @@ import '../services/device_location.dart';
 import '../services/location_search_service.dart';
 import 'doctor_detail_screen.dart';
 import '../widgets/chamber_accessibility.dart';
+import '../widgets/unclaimed_tag.dart';
 
 class NearbyDoctorsScreen extends StatefulWidget {
   final String? initialSpeciality;
@@ -762,6 +763,10 @@ class _NearbyDoctorCard extends StatelessWidget {
                           : 'General',
                       style: TextStyle(color: Colors.grey[600], fontSize: 13),
                     ),
+                    if (!doctor.isClaimedProfile) ...[
+                      const SizedBox(height: 4),
+                      const UnclaimedTag(),
+                    ],
                     if (distance != null && distance!.isNotEmpty) ...[
                       const SizedBox(height: 4),
                       Row(

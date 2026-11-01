@@ -1,9 +1,10 @@
 // Sets a chamber's regular visiting hours, and optionally today's override.
 //
-//   node scripts/set_chamber_hours.js <chamberId> --start 08:00 --end 20:00 [--days "Sat–Thu"] [--today] [--apply]
+//   node scripts/set_chamber_hours.js <chamberId> --start 08:00 --end 20:00 [--days "Sat–Thu"] [--today] [--date YYYYMMDD] [--apply]
 //
 // Dry run by default: prints what it would change. --apply writes.
-// --today also rewrites today's chamber_day_overrides doc (Asia/Dhaka date).
+// --today also rewrites that day's chamber_day_overrides doc (today in Asia/Dhaka,
+// or --date).
 
 const fs = require('fs');
 const os = require('os');
@@ -80,10 +81,10 @@ async function main() {
 
   const [sh, sm] = start.split(':').map(Number);
   const [eh, em] = end.split(':').map(Number);
-  const overrideId = `${chamberId}_${dhakaDateKey()}`;
+  const overrideId = `${chamberId}_${arg('--date', dhakaDateKey())}`;
   const overrideRef = db.collection('chamber_day_overrides').doc(overrideId);
   const ov = await overrideRef.get();
-  console.log(`  today override ${overrideId}: ${ov.exists ? JSON.stringify(ov.data(), (k, v) => (k === 'updatedAt' ? undefined : v)) : 'none'}`);
+  console.log(`  day override ${overrideId}: ${ov.exists ? JSON.stringify(ov.data(), (k, v) => (k === 'updatedAt' ? undefined : v)) : 'none'}`);
   if (today) console.log(`  today override new : ${start}–${end}`);
 
   if (!apply) {

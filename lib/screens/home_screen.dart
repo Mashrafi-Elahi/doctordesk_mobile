@@ -23,6 +23,7 @@ import '../services/notification_service.dart';
 import '../services/update_checker.dart';
 import '../theme/app_theme.dart';
 import '../theme/app_constants.dart';
+import '../widgets/unclaimed_tag.dart';
 
 class HomeScreen extends StatefulWidget {
   final Function(int, {String? searchQuery})? onTabSwitch;
@@ -1816,6 +1817,10 @@ class _DoctorListCard extends StatelessWidget {
                           ],
                         ],
                       ),
+                      if (!doctor.isClaimedProfile) ...[
+                        const SizedBox(height: 4),
+                        const UnclaimedTag(),
+                      ],
                       const SizedBox(height: 2),
                       Text(
                         specHospital,

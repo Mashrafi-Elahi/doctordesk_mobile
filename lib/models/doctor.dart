@@ -179,6 +179,27 @@ class Doctor {
     return chambers.any((c) => c.isAccessible);
   }
 
+  /// Claimed = a real DoctorDesk account runs this profile, so it can be booked.
+  bool get isClaimedProfile =>
+      isClaimed || claimStatus == 'claimed' || (claimedByUid?.trim().isNotEmpty ?? false);
+
+  bool get isVerifiedProfile =>
+      isBmdcVerified || verificationStatus == 'verified' || verificationStatus == 'checked_found';
+
+  /// Listing order: 0 claimed + verified, 1 claimed, 2 verified only, 3 rest.
+  int get listRank => isClaimedProfile ? (isVerifiedProfile ? 0 : 1) : (isVerifiedProfile ? 2 : 3);
+
+  /// Stable sort by [listRank], keeping the incoming order (relevance,
+  /// distance, name) within each rank.
+  static List<Doctor> sortForListing(Iterable<Doctor> doctors) {
+    final indexed = doctors.toList().asMap().entries.toList()
+      ..sort((a, b) {
+        final byRank = a.value.listRank.compareTo(b.value.listRank);
+        return byRank != 0 ? byRank : a.key.compareTo(b.key);
+      });
+    return indexed.map((e) => e.value).toList();
+  }
+
   Doctor copyWith({
     String? id,
     String? name,

@@ -23,6 +23,7 @@ import '../theme/app_theme.dart';
 import '../widgets/user_avatar.dart';
 import '../widgets/auth_modal.dart';
 import '../widgets/chamber_accessibility.dart';
+import '../widgets/unclaimed_tag.dart';
 
 String _reviewErrorMessage(Object error) {
   final raw = error.toString();
@@ -718,6 +719,10 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                               ],
                             ),
                           ),
+                        ],
+                        if (!doctor.isClaimedProfile) ...[
+                          const SizedBox(height: 4),
+                          const UnclaimedTag(),
                         ],
                         if (doctor.verificationStatus == 'checked_found') ...[
                           const SizedBox(height: 4),

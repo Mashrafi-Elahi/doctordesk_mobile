@@ -6,6 +6,7 @@ import '../services/auth_service.dart';
 import 'doctor_detail_screen.dart';
 import '../widgets/user_avatar.dart';
 import '../widgets/chamber_accessibility.dart';
+import '../widgets/unclaimed_tag.dart';
 
 class DoctorsScreen extends StatefulWidget {
   final String? initialQuery;
@@ -456,6 +457,10 @@ class _DoctorListCard extends StatelessWidget {
                           ),
                       ],
                     ),
+                    if (!doctor.isClaimedProfile) ...[
+                      const SizedBox(height: 4),
+                      const UnclaimedTag(),
+                    ],
                     const SizedBox(height: 4),
                     Text(
                       doctor.specialities.join(', '),
