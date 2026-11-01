@@ -50,7 +50,19 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
   String? _error;
 
   bool get _isDetail => widget.chamberId != null && widget.chamberId!.isNotEmpty;
-  bool get _isDoctorDesk => widget.doctorId != null && widget.doctorId!.isNotEmpty;
+  String? get _resolvedDoctorId {
+    if (widget.doctorId != null && widget.doctorId!.trim().isNotEmpty) {
+      return widget.doctorId!.trim();
+    }
+    final docProf = AuthService.userRoles.doctorProfileId;
+    if (docProf != null && docProf.trim().isNotEmpty) {
+      return docProf.trim();
+    }
+    return null;
+  }
+  bool get _isDoctorDesk =>
+      (widget.doctorId != null && widget.doctorId!.trim().isNotEmpty) ||
+      (AuthService.userRoles.isDoctor && _resolvedDoctorId != null);
 
   @override
   void initState() {
@@ -61,10 +73,11 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
   Future<void> _loadAssignments() async {
     try {
       if (_isDoctorDesk) {
-        // Query chambers for this doctor across all chambers
+        final docId = _resolvedDoctorId!;
+        // Query chambers for this doctor across all chambers using doctorIds array or ownerDoctorId
         final chSnap = await FirebaseFirestore.instance
             .collection('chambers')
-            .where('doctorId', isEqualTo: widget.doctorId)
+            .where('doctorIds', arrayContains: docId)
             .get();
         final docChambers = <String>[];
         for (final doc in chSnap.docs) {
@@ -75,7 +88,20 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
         }
 
         if (docChambers.isEmpty) {
-          final docSnap = await FirebaseFirestore.instance.collection('doctors').doc(widget.doctorId).get();
+          final ownerSnap = await FirebaseFirestore.instance
+              .collection('chambers')
+              .where('ownerDoctorId', isEqualTo: docId)
+              .get();
+          for (final doc in ownerSnap.docs) {
+            docChambers.add(doc.id);
+            final d = doc.data();
+            final name = (d['name'] ?? d['chamberName'] ?? d['hospitalName'] ?? '').toString().trim();
+            if (name.isNotEmpty) _chamberNames[doc.id] = name;
+          }
+        }
+
+        if (docChambers.isEmpty) {
+          final docSnap = await FirebaseFirestore.instance.collection('doctors').doc(docId).get();
           final chList = (docSnap.data()?['chambers'] as List?) ?? [];
           for (final c in chList) {
             if (c is Map) {
@@ -89,14 +115,14 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
           }
         }
 
-        // Re-route any pending requests on load
-        await DataService.reroutePendingRequests(doctorId: widget.doctorId);
+        // Re-route any pending requests on load with the doctor's doctorProfileId
+        await DataService.reroutePendingRequests(doctorId: docId);
 
         final desks = <_DeskAssignment>[];
         for (final id in docChambers) {
           desks.add(_DeskAssignment(
             chamberId: id,
-            doctorId: widget.doctorId,
+            doctorId: docId,
             chamberName: _chamberNames[id] ?? _chamberName(id),
           ));
         }
@@ -304,12 +330,13 @@ class _ChamberCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final queueQuery = isDoctorDesk && desk.doctorId != null
-        ? AppointmentQueries.todayQueueForDoctor(desk.doctorId!)
+    final docId = desk.doctorId ?? (isDoctorDesk ? AuthService.userRoles.doctorProfileId : null);
+    final queueQuery = isDoctorDesk && docId != null
+        ? AppointmentQueries.todayQueueForDoctor(docId)
         : AppointmentQueries.todayQueueForChamber(desk.chamberId, doctorId: desk.doctorId);
 
-    final requestsQuery = isDoctorDesk && desk.doctorId != null
-        ? AppointmentQueries.pendingRequestsForDoctor(desk.doctorId!)
+    final requestsQuery = isDoctorDesk && docId != null
+        ? AppointmentQueries.pendingRequestsForDoctor(docId)
         : AppointmentQueries.pendingRequestsForChamber(desk.chamberId, doctorId: desk.doctorId);
 
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
@@ -392,16 +419,17 @@ class _ChamberDeskDetail extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final requestsQuery = isDoctorDesk && doctorId != null
-        ? AppointmentQueries.pendingRequestsForDoctor(doctorId!)
+    final docId = doctorId ?? (isDoctorDesk ? AuthService.userRoles.doctorProfileId : null);
+    final requestsQuery = isDoctorDesk && docId != null
+        ? AppointmentQueries.pendingRequestsForDoctor(docId)
         : AppointmentQueries.pendingRequestsForChamber(chamberId, doctorId: doctorId);
 
-    final queueQuery = isDoctorDesk && doctorId != null
-        ? AppointmentQueries.todayQueueForDoctor(doctorId!)
+    final queueQuery = isDoctorDesk && docId != null
+        ? AppointmentQueries.todayQueueForDoctor(docId)
         : AppointmentQueries.todayQueueForChamber(chamberId, doctorId: doctorId);
 
-    final doneQuery = isDoctorDesk && doctorId != null
-        ? AppointmentQueries.completedForDoctor(doctorId!)
+    final doneQuery = isDoctorDesk && docId != null
+        ? AppointmentQueries.completedForDoctor(docId)
         : AppointmentQueries.completedForChamber(chamberId, doctorId: doctorId);
 
     return DefaultTabController(

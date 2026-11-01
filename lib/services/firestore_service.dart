@@ -14,6 +14,7 @@ import 'doctor_search_index.dart';
 import 'geofire_utils.dart';
 import 'notification_service.dart';
 import 'chat_service.dart';
+import 'auth_service.dart';
 
 /// Cloud Firestore service providing complete data access for DoctorDesk.
 /// Matches the method signatures of [ApiService] for transparent backend switching.
@@ -1678,10 +1679,16 @@ class FirestoreService {
   }
 
   /// Doctor streams operator applications for their chambers
-  static Stream<QuerySnapshot<Map<String, dynamic>>> operatorApplicationsStream(String doctorId) {
+  static Stream<QuerySnapshot<Map<String, dynamic>>> operatorApplicationsStream(String? doctorId) {
+    final effectiveId = (doctorId != null && doctorId.trim().isNotEmpty)
+        ? doctorId.trim()
+        : AuthService.userRoles.doctorProfileId;
+    if (effectiveId == null || effectiveId.isEmpty) {
+      return const Stream.empty();
+    }
     return _db
         .collection('operator_applications')
-        .where('doctorId', isEqualTo: doctorId)
+        .where('doctorId', isEqualTo: effectiveId)
         .snapshots();
   }
 
@@ -3076,14 +3083,23 @@ class FirestoreService {
     String? doctorId,
   }) async {
     try {
+      final effectiveDoctorId = (doctorId != null && doctorId.trim().isNotEmpty)
+          ? doctorId.trim()
+          : AuthService.userRoles.doctorProfileId;
+
+      if ((chamberIds == null || chamberIds.isEmpty) &&
+          (effectiveDoctorId == null || effectiveDoctorId.isEmpty)) {
+        return;
+      }
+
       Query<Map<String, dynamic>> query = _db
           .collection('appointments')
           .where('status', isEqualTo: 'requested');
 
       if (chamberIds != null && chamberIds.isNotEmpty) {
         query = query.where('chamberId', whereIn: chamberIds);
-      } else if (doctorId != null && doctorId.isNotEmpty) {
-        query = query.where('doctorId', isEqualTo: doctorId);
+      } else if (effectiveDoctorId != null && effectiveDoctorId.isNotEmpty) {
+        query = query.where('doctorId', isEqualTo: effectiveDoctorId);
       }
 
       final snap = await query.get();

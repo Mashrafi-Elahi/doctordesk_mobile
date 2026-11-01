@@ -196,7 +196,7 @@ class _DoctorManagerScreenState extends State<DoctorManagerScreen> {
             : TabBarView(
                 children: [
                   // Tab 1: Live Patient Queue Desk
-                  OperatorDeskScreen(showAppBar: false, doctorId: _doctorProfileId),
+                  OperatorDeskScreen(showAppBar: false, doctorId: _doctorProfileId ?? AuthService.userRoles.doctorProfileId),
 
                   // Tab 2: Chambers & Operator Assignment
                   _buildChambersSection(colorScheme),
@@ -1067,7 +1067,7 @@ class _DoctorManagerScreenState extends State<DoctorManagerScreen> {
   }
 
   Widget _buildPendingOperatorApplications(ColorScheme colorScheme) {
-    final docId = _doctorProfileId ?? AuthService.currentUser?.uid;
+    final docId = _doctorProfileId ?? AuthService.userRoles.doctorProfileId;
     if (docId == null || docId.isEmpty) return const SizedBox.shrink();
 
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
