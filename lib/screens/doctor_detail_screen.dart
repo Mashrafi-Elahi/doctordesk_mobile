@@ -506,6 +506,11 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                               setSheetState(() => isSubmitting = true);
                               final messenger = ScaffoldMessenger.of(context);
                               try {
+                                final day = await slotsFuture;
+                                if (day != null && day.totalCapacity > 0 && !day.hasSlots) {
+                                  throw StateError(
+                                      'No free time left on ${selectedDate.day}/${selectedDate.month}. Please pick another date.');
+                                }
                                 if (AuthService.userRoles.operatorAssignments
                                     .contains(selectedChamberId)) {
                                   throw StateError(
@@ -549,7 +554,9 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                                 if (mounted) {
                                   final msg = e.toString().contains('already have a request')
                                       ? 'You already have a request for this doctor on this date.'
-                                      : 'Booking error: $e';
+                                      : e is StateError
+                                          ? e.message
+                                          : 'Booking error: $e';
                                   messenger.showSnackBar(
                                     SnackBar(content: Text(msg)),
                                   );

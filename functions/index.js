@@ -51,9 +51,9 @@ async function notifyNext(now) {
     const appt = next.docs[0];
     const uid = appt.get('userId');
     if (!uid || appt.get('nextNotifiedAt')) continue;
-    await db.runTransaction(async (tx) => {
+    const created = await db.runTransaction(async (tx) => {
       const fresh = await tx.get(appt.ref);
-      if (fresh.get('nextNotifiedAt')) return;
+      if (fresh.get('nextNotifiedAt')) return false;
       tx.update(appt.ref, { nextNotifiedAt: FieldValue.serverTimestamp() });
       tx.create(db.collection('notifications').doc(), {
         // Same shape as NotificationService.createNotification in the app.
@@ -67,8 +67,9 @@ async function notifyNext(now) {
         timestamp: FieldValue.serverTimestamp(),
         expiresAt: Timestamp.fromMillis(Date.now() + 30 * 24 * 60 * 60 * 1000),
       });
-      sent++;
+      return true;
     });
+    if (created) sent++;
   }
   return sent;
 }

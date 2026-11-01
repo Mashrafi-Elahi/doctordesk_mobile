@@ -165,8 +165,10 @@ class AppointmentQueries {
   /// Count of pending requests for doctor (for badge).
   static Stream<int> pendingRequestCountForDoctor(String doctorProfileId) {
     if (doctorProfileId.isEmpty) return Stream.value(0);
+    // The list also shows 'proposed' (waiting on the patient); the badge
+    // counts only requests that need the doctor.
     return pendingRequestsForDoctor(doctorProfileId)
         .snapshots()
-        .map((s) => s.docs.length);
+        .map((s) => s.docs.where((d) => d.data()['status'] == 'requested').length);
   }
 }

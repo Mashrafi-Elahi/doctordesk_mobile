@@ -311,8 +311,9 @@ class _HomeScreenState extends State<HomeScreen> {
         } catch (_) {}
       }
 
+      // Page 1 leads with every claimed doctor, so it can exceed the limit.
       final List<Doctor> doctors =
-          List<Doctor>.from(doctorsData['doctors'] ?? []);
+          List<Doctor>.from(doctorsData['doctors'] ?? []).take(5).toList();
       final bool offlineFlag = doctorsData['isOffline'] == true;
 
       // Cache real data locally so cutting the backend keeps the app presentable

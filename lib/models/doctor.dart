@@ -180,8 +180,7 @@ class Doctor {
   }
 
   /// Claimed = a real DoctorDesk account runs this profile, so it can be booked.
-  bool get isClaimedProfile =>
-      isClaimed || claimStatus == 'claimed' || (claimedByUid?.trim().isNotEmpty ?? false);
+  bool get isClaimedProfile => claimedByUid?.trim().isNotEmpty ?? false;
 
   bool get isVerifiedProfile =>
       isBmdcVerified || verificationStatus == 'verified' || verificationStatus == 'checked_found';

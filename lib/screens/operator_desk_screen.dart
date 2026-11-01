@@ -1734,7 +1734,9 @@ class _AppointmentRow extends StatelessWidget {
 
 
 /// Top of Today's Queue: who is in, how many wait, and the next token to call.
-/// Checked-in patients are called before ones who have not arrived yet.
+/// Call next goes strictly by token so it matches what patients are told
+/// ("2 ahead", "You're next"); to call an arrived patient early, use that
+/// row's Call in.
 class _NowServingBar extends StatelessWidget {
   const _NowServingBar({required this.docs});
 
@@ -1764,11 +1766,7 @@ class _NowServingBar extends StatelessWidget {
     final theme = Theme.of(context);
     final current = docs.where((d) => _status(d) == ApptStatus.inConsultation).toList();
     final waiting = docs.where((d) => ApptStatus.waiting.contains(_status(d))).toList()
-      ..sort((a, b) {
-        final arrived = (_status(a) == ApptStatus.checkedIn ? 0 : 1)
-            .compareTo(_status(b) == ApptStatus.checkedIn ? 0 : 1);
-        return arrived != 0 ? arrived : _token(a).compareTo(_token(b));
-      });
+      ..sort((a, b) => _token(a).compareTo(_token(b)));
     final next = waiting.isEmpty ? null : waiting.first;
     final doctorId = docs.isEmpty ? '' : (docs.first.data()['doctorId'] ?? '').toString();
     final isThisDoctor = doctorId.isNotEmpty &&
