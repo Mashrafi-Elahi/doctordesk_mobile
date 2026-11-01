@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -490,7 +491,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                             Icon(Icons.block, size: 16, color: isMe ? Colors.white70 : Colors.red),
                                             const SizedBox(width: 6),
                                             Text(
-                                              'Attachment revoked by patient',
+                                              'Removed by sender',
                                               style: TextStyle(
                                                 fontSize: 12,
                                                 fontStyle: FontStyle.italic,
@@ -522,6 +523,14 @@ class _ChatScreenState extends State<ChatScreen> {
                                             ),
                                           ],
                                         ),
+                                      )
+                                    else if (msg.inlineId != null)
+                                      _InlineImageAttachment(
+                                        chatId: widget.chatId,
+                                        attachmentId: msg.inlineId!,
+                                        title: msg.fileName ?? 'Photo',
+                                        isMe: isMe,
+                                        onRevoke: isMe ? () => _confirmRevokeAttachment(msg.id) : null,
                                       )
                                     else
                                       Container(
@@ -684,6 +693,85 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
         );
       },
+    );
+  }
+}
+
+/// A photo stored inline in Firestore. Loaded only when its bubble is built,
+/// never as part of the message list query.
+class _InlineImageAttachment extends StatelessWidget {
+  const _InlineImageAttachment({
+    required this.chatId,
+    required this.attachmentId,
+    required this.title,
+    required this.isMe,
+    this.onRevoke,
+  });
+
+  final String chatId;
+  final String attachmentId;
+  final String title;
+  final bool isMe;
+  final VoidCallback? onRevoke;
+
+  void _openFull(BuildContext context, Uint8List bytes) {
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => Scaffold(
+        backgroundColor: Colors.black,
+        appBar: AppBar(
+          backgroundColor: Colors.black,
+          foregroundColor: Colors.white,
+          title: Text(title, style: const TextStyle(fontSize: 15)),
+        ),
+        body: Center(
+          child: InteractiveViewer(maxScale: 5, child: Image.memory(bytes)),
+        ),
+      ),
+    ));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final muted = isMe ? Colors.white70 : Colors.grey.shade600;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        FutureBuilder<Uint8List?>(
+          future: ChatService.loadInlineImage(chatId, attachmentId),
+          builder: (context, snap) {
+            if (snap.connectionState != ConnectionState.done) {
+              return const SizedBox(
+                width: 200,
+                height: 150,
+                child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+              );
+            }
+            final bytes = snap.data;
+            if (bytes == null) {
+              return Text('Photo unavailable',
+                  style: TextStyle(fontSize: 12, fontStyle: FontStyle.italic, color: muted));
+            }
+            return Semantics(
+              label: 'Photo: $title. Tap to open.',
+              child: GestureDetector(
+                onTap: () => _openFull(context, bytes),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: Image.memory(bytes, width: 220, height: 220, fit: BoxFit.cover, gaplessPlayback: true),
+                ),
+              ),
+            );
+          },
+        ),
+        if (onRevoke != null)
+          TextButton.icon(
+            onPressed: onRevoke,
+            style: TextButton.styleFrom(foregroundColor: isMe ? Colors.white : Colors.red),
+            icon: const Icon(Icons.delete_outline, size: 16),
+            label: const Text('Unsend photo', style: TextStyle(fontSize: 12)),
+          ),
+      ],
     );
   }
 }

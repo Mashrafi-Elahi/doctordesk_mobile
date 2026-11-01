@@ -580,6 +580,26 @@ service cloud.firestore {
         );
         allow delete: if isAdmin();
       }
+
+      // Inline chat photos (no Cloud Storage on the free plan). Readable by
+      // chat participants only; capped well under the 1 MiB document limit;
+      // the sender can delete (unsend) but never edit.
+      match /attachments/{attachmentId} {
+        allow read: if isAuthenticated() && (
+          isAdmin() ||
+          request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants
+        );
+        allow create: if isAuthenticated() &&
+          request.resource.data.senderUid == request.auth.uid &&
+          request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants &&
+          get(/databases/$(database)/documents/chats/$(chatId)).data.status == 'active' &&
+          request.resource.data.keys().hasOnly(['bytes', 'mimeType', 'senderUid', 'createdAt']) &&
+          request.resource.data.bytes is bytes &&
+          request.resource.data.bytes.size() <= 716800 &&
+          request.resource.data.mimeType == 'image/jpeg';
+        allow update: if false;
+        allow delete: if isAuthenticated() && (isAdmin() || resource.data.senderUid == request.auth.uid);
+      }
     }
 
     // 15. Paid Online Consultations

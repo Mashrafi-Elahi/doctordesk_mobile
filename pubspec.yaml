@@ -17,6 +17,7 @@ dependencies:
   google_sign_in: ^6.3.0
   firebase_storage: ^13.5.0
   image_picker: ^1.1.2
+  image: ^4.5.0
   flutter_tts: ^4.2.2
   cloud_firestore: ^6.10.0
   dart_geohash: ^2.1.0

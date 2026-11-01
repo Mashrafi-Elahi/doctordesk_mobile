@@ -1,11 +1,54 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:image/image.dart' as img;
 import '../models/chat_message.dart';
 import 'notification_service.dart';
 
 class ChatService {
   static final FirebaseFirestore _db = FirebaseFirestore.instance;
+
+  /// Inline chat images live in Firestore (no Cloud Storage on the free
+  /// plan). Must stay under the 1 MiB document limit; firestore.rules
+  /// enforces the same cap.
+  static const maxInlineImageBytes = 700 * 1024;
+
+  /// Longest side at most 1024 px, JPEG, stepping quality and size down until
+  /// it fits [maxInlineImageBytes]. Runs off the UI isolate.
+  static Future<Uint8List> compressForChat(Uint8List input) => compute(_compressForChat, input);
+
+  static Uint8List _compressForChat(Uint8List input) {
+    final decoded = img.decodeImage(input);
+    if (decoded == null) throw StateError('This file is not a readable image.');
+    final upright = img.bakeOrientation(decoded);
+    for (final side in const [1024, 800, 640]) {
+      final resized = upright.width <= side && upright.height <= side
+          ? upright
+          : (upright.width >= upright.height
+              ? img.copyResize(upright, width: side)
+              : img.copyResize(upright, height: side));
+      for (final quality in const [70, 55, 40]) {
+        final out = img.encodeJpg(resized, quality: quality);
+        if (out.length <= maxInlineImageBytes) return out;
+      }
+    }
+    throw StateError('This photo is too detailed to send. Try a closer, cropped photo.');
+  }
+
+  static final Map<String, Uint8List> _inlineCache = {};
+
+  /// Bytes of an inline image attachment, cached for the session. Null when
+  /// it was revoked or is not readable.
+  static Future<Uint8List?> loadInlineImage(String chatId, String attachmentId) async {
+    final key = '$chatId/$attachmentId';
+    final cached = _inlineCache[key];
+    if (cached != null) return cached;
+    final snap = await _db.collection('chats').doc(chatId).collection('attachments').doc(attachmentId).get();
+    final blob = snap.data()?['bytes'];
+    if (blob is! Blob) return null;
+    if (_inlineCache.length >= 40) _inlineCache.remove(_inlineCache.keys.first);
+    return _inlineCache[key] = blob.bytes;
+  }
 
   static String generateChatId(String uid1, String uid2) {
     return uid1.compareTo(uid2) < 0 ? '${uid1}_$uid2' : '${uid2}_$uid1';
@@ -155,7 +198,9 @@ class ChatService {
     required String text,
     required String senderName,
     Map<String, dynamic>? attachment,
+    Uint8List? inlineImage,
   }) async {
+    assert(inlineImage == null || attachment != null);
     final cleanText = text.trim();
     if (cleanText.isEmpty && attachment == null) return;
 
@@ -176,6 +221,18 @@ class ChatService {
 
     final msgRef = chatRef.collection('messages').doc();
     final batch = _db.batch();
+
+    // The image and the message that points at it are written together.
+    if (inlineImage != null) {
+      final attachRef = chatRef.collection('attachments').doc();
+      batch.set(attachRef, {
+        'bytes': Blob(inlineImage),
+        'mimeType': 'image/jpeg',
+        'senderUid': senderUid,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+      attachment = {...attachment!, 'inlineId': attachRef.id, 'sizeBytes': inlineImage.length};
+    }
 
     final msgData = <String, dynamic>{
       'senderUid': senderUid,
@@ -224,10 +281,18 @@ class ChatService {
       updatedAttachment['isRevoked'] = true;
       updatedAttachment['revokedAt'] = FieldValue.serverTimestamp();
 
-      await msgRef.update({
+      final batch = _db.batch();
+      batch.update(msgRef, {
         'attachment': updatedAttachment,
         'updatedAt': FieldValue.serverTimestamp(),
       });
+      // Revoking an inline image deletes the bytes, not just the link.
+      final inlineId = attachment['inlineId']?.toString();
+      if (inlineId != null && inlineId.isNotEmpty) {
+        batch.delete(_db.collection('chats').doc(chatId).collection('attachments').doc(inlineId));
+        _inlineCache.remove('$chatId/$inlineId');
+      }
+      await batch.commit();
     }
   }
 }

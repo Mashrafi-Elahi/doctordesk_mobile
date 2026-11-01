@@ -18,6 +18,8 @@ class ChatMessage {
   bool get hasAttachment => attachment != null;
   bool get isRevoked => attachment?['isRevoked'] == true;
   String? get fileUrl => attachment?['fileUrl']?.toString();
+  /// Set for photos stored in chats/{id}/attachments (no Cloud Storage).
+  String? get inlineId => attachment?['inlineId']?.toString();
   String? get storagePath => attachment?['storagePath']?.toString();
   String? get fileName => attachment?['fileName']?.toString() ?? attachment?['title']?.toString();
   String? get fileCategory => attachment?['fileCategory']?.toString() ?? attachment?['category']?.toString();

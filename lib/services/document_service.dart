@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
@@ -347,39 +346,24 @@ class DocumentService {
     }
 
     final ext = doc.localPath.split('.').last.toLowerCase();
-    if (ext != 'pdf' && ext != 'jpg' && ext != 'jpeg' && ext != 'png') {
-      throw StateError('Only PDF, JPG, and PNG files are allowed.');
+    if (ext == 'pdf') {
+      throw StateError(
+          "PDFs can't be sent yet. Send a photo of the page instead.");
+    }
+    if (ext != 'jpg' && ext != 'jpeg' && ext != 'png') {
+      throw StateError('Only JPG and PNG photos can be sent.');
     }
 
-    final sanitizedTitle = doc.title.replaceAll(RegExp(r'[^a-zA-Z0-9_\-\.]'), '_');
-    final storagePath = 'chat_files/$chatId/${doc.id}_$sanitizedTitle.$ext';
-    final storageRef = FirebaseStorage.instance.ref().child(storagePath);
-
-    final uploadTask = storageRef.putFile(
-      file,
-      SettableMetadata(
-        contentType: doc.mimeType,
-        customMetadata: {
-          'chatId': chatId,
-          'uploadedBy': senderUid,
-          'documentTitle': doc.title,
-          'documentCategory': doc.category,
-        },
-      ),
-    );
-
-    final snapshot = await uploadTask;
-    final downloadUrl = await snapshot.ref.getDownloadURL();
+    // No Cloud Storage on the free plan: the photo is compressed and stored
+    // in Firestore next to the message (see docs/adr/ADR-001).
+    final jpeg = await ChatService.compressForChat(await file.readAsBytes());
 
     final attachmentData = <String, dynamic>{
-      'fileUrl': downloadUrl,
-      'storagePath': storagePath,
       'title': doc.title,
       'fileName': doc.title,
       'category': doc.category,
       'fileCategory': doc.category,
-      'mimeType': doc.mimeType,
-      'sizeBytes': fileSize,
+      'mimeType': 'image/jpeg',
       'sharedAt': FieldValue.serverTimestamp(),
       'expiresAt': Timestamp.fromDate(DateTime.now().add(const Duration(days: 30))),
       'isRevoked': false,
@@ -393,6 +377,7 @@ class DocumentService {
       text: '📎 Shared ${doc.category}: ${doc.title}',
       senderName: senderName,
       attachment: attachmentData,
+      inlineImage: jpeg,
     );
   }
 }

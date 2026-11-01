@@ -6,7 +6,7 @@ import {
   assertSucceeds,
   initializeTestEnvironment,
 } from '@firebase/rules-unit-testing';
-import { collection, doc, getDoc, getDocs, orderBy, query, setDoc, updateDoc, deleteDoc, runTransaction, where } from 'firebase/firestore';
+import { Bytes, collection, doc, getDoc, getDocs, orderBy, query, setDoc, updateDoc, deleteDoc, runTransaction, where } from 'firebase/firestore';
 
 const projectId = 'doctordesk-rules-test';
 const rules = readFileSync(new URL('../../firestore.rules', import.meta.url), 'utf8');
@@ -955,5 +955,59 @@ describe('per-doctor daily queue and appointment lifecycle', () => {
     await assertFails(setDoc(doc(opDb, 'queues/chamber-a_doctor-profile_20300102'), {
       chamberId: 'chamber-a', doctorId: 'doctor-profile', date: '20300101', lastNumber: 1,
     }));
+  });
+});
+
+describe('inline chat photo attachments', () => {
+  const CHAT = 'chats/chat-att';
+  async function seedChat(status = 'active') {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), CHAT), {
+        participants: ['patient', 'doctor'],
+        patientUid: 'patient',
+        doctorUid: 'doctor',
+        doctorId: 'doctor-profile',
+        status,
+        messageCount: 0,
+        messageLimit: 20,
+      });
+    });
+  }
+  const photo = (sender, size = 1024) => ({
+    bytes: Bytes.fromUint8Array(new Uint8Array(size)),
+    mimeType: 'image/jpeg',
+    senderUid: sender,
+    createdAt: new Date(),
+  });
+
+  it('lets a participant send a photo the other participant can read', async () => {
+    await seedChat();
+    const patientDb = testEnv.authenticatedContext('patient').firestore();
+    const doctorDb = testEnv.authenticatedContext('doctor').firestore();
+    await assertSucceeds(setDoc(doc(patientDb, `${CHAT}/attachments/a1`), photo('patient')));
+    await assertSucceeds(getDoc(doc(doctorDb, `${CHAT}/attachments/a1`)));
+  });
+
+  it('refuses outsiders, closed chats, oversize photos and spoofed senders', async () => {
+    await seedChat();
+    const strangerDb = testEnv.authenticatedContext('stranger').firestore();
+    const patientDb = testEnv.authenticatedContext('patient').firestore();
+    await assertFails(setDoc(doc(strangerDb, `${CHAT}/attachments/x1`), photo('stranger')));
+    await assertFails(setDoc(doc(patientDb, `${CHAT}/attachments/x2`), photo('doctor')));
+    await assertFails(setDoc(doc(patientDb, `${CHAT}/attachments/x3`), photo('patient', 800 * 1024)));
+    await assertSucceeds(setDoc(doc(patientDb, `${CHAT}/attachments/ok`), photo('patient')));
+    await assertFails(getDoc(doc(strangerDb, `${CHAT}/attachments/ok`)));
+    await seedChat('closed');
+    await assertFails(setDoc(doc(patientDb, `${CHAT}/attachments/x4`), photo('patient')));
+  });
+
+  it('lets only the sender unsend, and nobody edit', async () => {
+    await seedChat();
+    const patientDb = testEnv.authenticatedContext('patient').firestore();
+    const doctorDb = testEnv.authenticatedContext('doctor').firestore();
+    await assertSucceeds(setDoc(doc(patientDb, `${CHAT}/attachments/a2`), photo('patient')));
+    await assertFails(updateDoc(doc(patientDb, `${CHAT}/attachments/a2`), { mimeType: 'image/png' }));
+    await assertFails(deleteDoc(doc(doctorDb, `${CHAT}/attachments/a2`)));
+    await assertSucceeds(deleteDoc(doc(patientDb, `${CHAT}/attachments/a2`)));
   });
 });
