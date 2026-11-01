@@ -1236,19 +1236,22 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
           return Column(
             children: [
-              ListTile(
-                leading: Icon(item.icon, color: AppColors.primary, size: 22),
-                title: Text(
-                  item.title,
-                  style: GoogleFonts.poppins(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
-                    color: AppColors.textPrimary,
+              Material(
+                color: Colors.transparent,
+                child: ListTile(
+                  leading: Icon(item.icon, color: AppColors.primary, size: 22),
+                  title: Text(
+                    item.title,
+                    style: GoogleFonts.poppins(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                      color: AppColors.textPrimary,
+                    ),
                   ),
+                  trailing: const Icon(Icons.chevron_right,
+                      size: 20, color: AppColors.textSecondary),
+                  onTap: item.onTap,
                 ),
-                trailing: const Icon(Icons.chevron_right,
-                    size: 20, color: AppColors.textSecondary),
-                onTap: item.onTap,
               ),
               if (!isLast)
                 const Divider(

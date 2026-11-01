@@ -139,7 +139,7 @@ class NotificationService {
 
   /// Real-time stream of notifications for the current user
   static Stream<List<AppNotification>> notificationsStream(String userId) {
-    if (userId.isEmpty || userId == 'guest') {
+    if (userId.isEmpty || userId == 'guest' || _db.app.options.projectId.isEmpty || FirebaseAuth.instance.currentUser == null) {
       return Stream.fromFuture(loadLocalNotifications(userId));
     }
 

@@ -1,14 +1,12 @@
 import 'consultation_management_screen.dart';
 import 'bmdc_verification_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
 import '../services/auth_service.dart';
 import '../services/data_service.dart';
-import '../services/firestore_config.dart';
 import '../services/firestore_service.dart';
 import '../widgets/app_role_and_nav.dart';
 
@@ -645,53 +643,19 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
     final stopwatch = Stopwatch()..start();
 
     try {
-      if (FirestoreConfig.useFirestore) {
-        await ApiService.fetchSpecialities();
-        stopwatch.stop();
-
-        final qData = await ApiService.fetchTodayQueue('demo-chamber');
-        final dRes = await ApiService.fetchDoctors(limit: 1);
-
-        if (mounted) {
-          setState(() {
-            _loading = false;
-            _serverStatus = 'Online (Cloud Firestore)';
-            _latencyMs = stopwatch.elapsedMilliseconds;
-            _appointmentCount = qData.length;
-            _doctorCount = dRes['total'] ?? 0;
-          });
-        }
-        return;
-      }
-
-      final res = await ApiService.getRequest('/health');
+      await ApiService.fetchSpecialities();
       stopwatch.stop();
 
-      int apptCount = 0;
-      try {
-        final qRes = await ApiService.getRequest(
-            '/appointments/today?chamberId=demo-chamber');
-        if (qRes.statusCode == 200) {
-          final qData = jsonDecode(qRes.body)['data'] as List?;
-          apptCount = qData?.length ?? 0;
-        }
-      } catch (_) {}
-
-      int docCount = 0;
-      try {
-        final dRes = await ApiService.fetchDoctors(limit: 1);
-        docCount = dRes['total'] ?? 0;
-      } catch (_) {}
+      final qData = await ApiService.fetchTodayQueue('demo-chamber');
+      final dRes = await ApiService.fetchDoctors(limit: 1);
 
       if (mounted) {
         setState(() {
           _loading = false;
-          _serverStatus = res.statusCode == 200
-              ? 'Online & Healthy'
-              : 'Status code: ${res.statusCode}';
+          _serverStatus = 'Online (Cloud Firestore)';
           _latencyMs = stopwatch.elapsedMilliseconds;
-          _appointmentCount = apptCount;
-          _doctorCount = docCount;
+          _appointmentCount = qData.length;
+          _doctorCount = dRes['total'] ?? 0;
         });
       }
     } catch (e) {

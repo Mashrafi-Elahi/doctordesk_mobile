@@ -245,6 +245,27 @@ class SchedulingService {
     return null;
   }
 
+  static Map<String, dynamic> structuredVisitingHours(String text) {
+    final clean = text.trim();
+    final schedule = parseVisitingHours(clean);
+    if (schedule != null) {
+      final startStr = '${schedule.start.hour.toString().padLeft(2, '0')}:${schedule.start.minute.toString().padLeft(2, '0')}';
+      final endStr = '${schedule.end.hour.toString().padLeft(2, '0')}:${schedule.end.minute.toString().padLeft(2, '0')}';
+      return {
+        'days': schedule.visitingDays,
+        'start': startStr,
+        'end': endStr,
+        'display': clean.isNotEmpty ? clean : 'Visiting hours not set',
+      };
+    }
+    return {
+      'days': const [1, 2, 3, 4, 6, 7],
+      'start': '17:00',
+      'end': '21:00',
+      'display': clean.isNotEmpty ? clean : 'Visiting hours not set',
+    };
+  }
+
   static Future<Map<String, dynamic>?> getDayOverride(String chamberId, DateTime date) async {
     try {
       final docId = '${chamberId}_${dateKey(date)}';

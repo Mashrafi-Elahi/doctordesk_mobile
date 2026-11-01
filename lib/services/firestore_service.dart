@@ -1,3 +1,4 @@
+import 'dart:isolate';
 import 'scheduling_service.dart';
 import 'chamber_resolver.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -366,11 +367,12 @@ class FirestoreService {
     }
 
     final isClaimed = applicantUid != null && applicantUid.trim().isNotEmpty;
+    final fullName = normalizedName.startsWith('Dr.')
+        ? normalizedName
+        : 'Dr. $normalizedName';
     final data = <String, dynamic>{
-      'name': normalizedName.startsWith('Dr.')
-          ? normalizedName
-          : 'Dr. $normalizedName',
-      'name_lower': normalizedName.toLowerCase(),
+      'name': fullName,
+      'name_lower': fullName.toLowerCase(),
       'specialities': normalizedSpecialities,
       'designation': designation ?? 'Consultant',
       'experienceYears': experienceYears,
@@ -559,63 +561,65 @@ class FirestoreService {
     int limit = 20,
   }) async {
     final allMaps = await _getIndexedBundledMaps();
-    final List<Doctor> matched = [];
-
     final normArea = areaFilter?.trim().toLowerCase();
 
-    for (final data in allMaps) {
-      final specs = (data['specialities'] as List? ?? const [])
-          .map((e) => e.toString())
-          .toList();
-      if (speciality != null &&
-          speciality.isNotEmpty &&
-          speciality != 'All' &&
-          !_matchesSpecialtyFilter(specs, speciality)) {
-        continue;
-      }
+    final List<Doctor> matched = await Isolate.run(() {
+      final List<Doctor> list = [];
+      for (final data in allMaps) {
+        final specs = (data['specialities'] as List? ?? const [])
+            .map((e) => e.toString())
+            .toList();
+        if (speciality != null &&
+            speciality.isNotEmpty &&
+            speciality != 'All' &&
+            !_matchesSpecialtyFilter(specs, speciality)) {
+          continue;
+        }
 
-      final chambers = (data['chambers'] as List? ?? const [])
-          .whereType<Map>()
-          .map((c) => Map<String, dynamic>.from(c))
-          .toList();
+        final chambers = (data['chambers'] as List? ?? const [])
+            .whereType<Map>()
+            .map((c) => Map<String, dynamic>.from(c))
+            .toList();
 
-      double? bestDist;
-      Map<String, dynamic>? bestChamber;
-      for (final ch in chambers) {
-        final chLat = (ch['lat'] as num?)?.toDouble();
-        final chLng = (ch['lng'] as num?)?.toDouble();
-        final chArea = (ch['area'] ?? ch['location'] ?? '').toString().toLowerCase();
-        final chHosp = (ch['hospitalName'] ?? ch['name'] ?? '').toString().toLowerCase();
+        double? bestDist;
+        Map<String, dynamic>? bestChamber;
+        for (final ch in chambers) {
+          final chLat = (ch['lat'] as num?)?.toDouble();
+          final chLng = (ch['lng'] as num?)?.toDouble();
+          final chArea = (ch['area'] ?? ch['location'] ?? '').toString().toLowerCase();
+          final chHosp = (ch['hospitalName'] ?? ch['name'] ?? '').toString().toLowerCase();
 
-        bool isAreaMatch = false;
-        if (normArea != null && normArea.isNotEmpty && normArea != 'all') {
-          final cleanNorm = normArea.replaceAll('l', '');
-          final cleanArea = chArea.replaceAll('l', '');
-          if (chArea.contains(normArea) || chHosp.contains(normArea) || cleanArea.contains(cleanNorm)) {
-            isAreaMatch = true;
+          bool isAreaMatch = false;
+          if (normArea != null && normArea.isNotEmpty && normArea != 'all') {
+            final cleanNorm = normArea.replaceAll('l', '');
+            final cleanArea = chArea.replaceAll('l', '');
+            if (chArea.contains(normArea) || chHosp.contains(normArea) || cleanArea.contains(cleanNorm)) {
+              isAreaMatch = true;
+            }
+          }
+
+          if (chLat != null && chLng != null && (chLat != 0.0 || chLng != 0.0)) {
+            final dist = GeofireUtils.distanceBetweenKm([lat, lng], [chLat, chLng]);
+            if ((dist <= radiusKm || isAreaMatch) && (bestDist == null || dist < bestDist)) {
+              bestDist = dist;
+              bestChamber = ch;
+            }
+          } else if (isAreaMatch) {
+            bestChamber ??= ch;
           }
         }
 
-        if (chLat != null && chLng != null && (chLat != 0.0 || chLng != 0.0)) {
-          final dist = GeofireUtils.distanceBetweenKm([lat, lng], [chLat, chLng]);
-          if ((dist <= radiusKm || isAreaMatch) && (bestDist == null || dist < bestDist)) {
-            bestDist = dist;
-            bestChamber = ch;
-          }
-        } else if (isAreaMatch) {
-          bestChamber ??= ch;
+        if (bestChamber != null) {
+          final copy = Map<String, dynamic>.from(data);
+          copy['distance'] = bestDist;
+          copy['chamber'] = bestChamber;
+          list.add(Doctor.fromJson(copy));
         }
       }
 
-      if (bestChamber != null) {
-        final copy = Map<String, dynamic>.from(data);
-        copy['distance'] = bestDist;
-        copy['chamber'] = bestChamber;
-        matched.add(Doctor.fromJson(copy));
-      }
-    }
-
-    matched.sort((a, b) => (a.distance ?? 999.0).compareTo(b.distance ?? 999.0));
+      list.sort((a, b) => (a.distance ?? 999.0).compareTo(b.distance ?? 999.0));
+      return list;
+    });
 
     final startIndex = (page - 1) * limit;
     if (startIndex >= matched.length) return [];
@@ -1122,6 +1126,8 @@ class FirestoreService {
       'chamberId': chamberId,
       'name': chamberName,
       'chamberName': chamberName,
+      'ownerDoctorId': doctorId,
+      'doctorIds': FieldValue.arrayUnion([doctorId]),
       'doctorId': doctorId,
       'doctorName': docName,
       'hasOperator': true,
@@ -1505,7 +1511,51 @@ class FirestoreService {
     final List<Map<String, dynamic>> result = [];
     final seen = <String>{};
 
-    // 1. Fetch claimed / dynamic doctors from Firestore
+    // 1. Fetch canonical chambers directly from chambers collection
+    try {
+      final chambersSnap = await _db.collection('chambers').limit(100).get();
+      for (final doc in chambersSnap.docs) {
+        final c = doc.data();
+        if (c['hidden'] == true || c['isHidden'] == true) continue;
+        final chId = doc.id;
+        final chName = (c['name'] ?? c['hospitalName'] ?? c['chamberName'] ?? 'Chamber').toString();
+        final docId = (c['ownerDoctorId'] ?? c['doctorId'] ?? '').toString();
+        final docName = (c['doctorName'] ?? 'Doctor Specialist').toString();
+
+        String hoursStr = '5:00 PM – 9:00 PM';
+        final vh = c['visitingHours'];
+        if (vh is Map && vh['display'] != null) {
+          hoursStr = vh['display'].toString();
+        } else if (vh is String && vh.trim().isNotEmpty) {
+          hoursStr = vh.trim();
+        } else if (c['visitingHoursDisplay'] is String && (c['visitingHoursDisplay'] as String).isNotEmpty) {
+          hoursStr = c['visitingHoursDisplay'].toString();
+        }
+
+        if (seen.add(chId)) {
+          result.add({
+            'id': chId,
+            'name': chName,
+            'area': (c['area'] ?? c['location'] ?? 'Dhaka').toString(),
+            'visitingHours': hoursStr,
+            'fee': c['fee'] ?? 800,
+            'doctorId': docId,
+            'doctorName': docName,
+            'doctorSpecialty': (c['doctorSpecialty'] ?? 'General Medicine').toString(),
+            'hasOperator': c['hasOperator'] == true || c['operatorUid'] != null,
+            'operatorUid': c['operatorUid'],
+            'operatorName': c['operatorName'],
+            'operatorEmail': c['operatorEmail'],
+            'isAccessible': c['isAccessible'] == true || c['wheelchairEntrance'] == true,
+            'isClaimedDoctor': true,
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('Error fetching top-level chambers: $e');
+    }
+
+    // 2. Supplement with claimed / dynamic doctors from Firestore
     try {
       final firestoreDocs = await _db.collection('doctors').limit(50).get();
       for (final doc in firestoreDocs.docs) {
@@ -2521,16 +2571,32 @@ class FirestoreService {
     required String bmdcNumber,
     required String adminUid,
   }) async {
-    final batch = _db.batch();
+    String? docName;
+    final doctorRef = _db.collection('doctors').doc(doctorId);
     final claimRef = _db.collection('claim_requests').doc(requestId);
+    try {
+      final docSnap = await doctorRef.get();
+      if (docSnap.exists) {
+        docName = docSnap.data()?['name']?.toString();
+      }
+      if (docName == null || docName.isEmpty) {
+        final claimSnap = await claimRef.get();
+        if (claimSnap.exists) {
+          docName = claimSnap.data()?['doctorName']?.toString();
+        }
+      }
+    } catch (_) {}
+
+    final batch = _db.batch();
     batch.update(claimRef, {
       'status': 'approved',
       'reviewedAt': FieldValue.serverTimestamp(),
       'reviewedBy': adminUid,
     });
 
-    final doctorRef = _db.collection('doctors').doc(doctorId);
     batch.set(doctorRef, {
+      if (docName != null && docName.isNotEmpty) 'name': docName,
+      if (docName != null && docName.isNotEmpty) 'name_lower': docName.toLowerCase(),
       'claimedByUid': applicantUid,
       'isClaimed': true,
       'claimStatus': 'approved',
@@ -2687,8 +2753,7 @@ class FirestoreService {
     }
     try {
       final jsonStr = await rootBundle.loadString('assets/data/bundled_doctors.json');
-      final List decoded = jsonDecode(jsonStr);
-      _cachedBundledDoctors = decoded.map((j) => Doctor.fromJson(j as Map<String, dynamic>)).toList();
+      _cachedBundledDoctors = await compute(_parseBundledDoctorsJson, jsonStr);
       return _cachedBundledDoctors!;
     } catch (e) {
       debugPrint('Error loading bundled doctors: $e');
@@ -2700,6 +2765,11 @@ class FirestoreService {
 
   /// Returns the actual number of records in the APK's bundled directory.
   /// Admin upload UI uses this instead of a hand-maintained display constant.
+  static List<Doctor> _parseBundledDoctorsJson(String jsonStr) {
+    final List decoded = jsonDecode(jsonStr);
+    return decoded.map((j) => Doctor.fromJson(j as Map<String, dynamic>)).toList();
+  }
+
   static Future<int> bundledDoctorCount() async => (await getBundledDoctors()).length;
 
   static List<Map<String, dynamic>> _defaultFallbackDoctors() {
@@ -2968,7 +3038,14 @@ class FirestoreService {
     final batch = _db.batch();
 
     final doctorRef = _db.collection('doctors').doc(doctorId);
+    final docSnap = await doctorRef.get();
+    final dData = docSnap.data() ?? {};
+    final docName = (dData['name'] ?? userData['displayName'] ?? userData['name'] ?? 'Doctor Specialist').toString();
+    final docNameLower = (dData['name_lower'] ?? docName.toLowerCase()).toString();
+
     batch.set(doctorRef, {
+      'name': docName,
+      'name_lower': docNameLower,
       'claimedByUid': uid,
       'isClaimed': true,
       'claimStatus': 'claimed',

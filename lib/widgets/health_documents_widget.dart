@@ -469,9 +469,10 @@ class _HealthDocumentsWidgetState extends State<HealthDocumentsWidget> {
             ),
           )
         else
-          Expanded(
-            child: ListView(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 // Folders Section
                 if (_filteredFolders.isNotEmpty) ...[

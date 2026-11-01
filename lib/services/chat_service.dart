@@ -1,3 +1,5 @@
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/chat_message.dart';
 import 'notification_service.dart';
@@ -125,6 +127,9 @@ class ChatService {
   }
 
   static Stream<List<ChatSession>> streamUserChats(String uid) {
+    if (uid.isEmpty || FirebaseAuth.instance.currentUser == null) {
+      return const Stream.empty();
+    }
     return _db
         .collection('chats')
         .where('participants', arrayContains: uid)
@@ -133,6 +138,9 @@ class ChatService {
       final list = snap.docs.map((d) => ChatSession.fromFirestore(d)).toList();
       list.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
       return list;
+    }).handleError((e) {
+      debugPrint('[ChatService] streamUserChats error: $e');
+      return <ChatSession>[];
     });
   }
 

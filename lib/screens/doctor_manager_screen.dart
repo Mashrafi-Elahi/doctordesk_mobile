@@ -1,3 +1,4 @@
+import '../services/scheduling_service.dart';
 import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
@@ -437,15 +438,24 @@ class _DoctorManagerScreenState extends State<DoctorManagerScreen> {
                   final area = areaCtrl.text.trim();
                   if (name.isEmpty) return;
 
+                  final rawHours = hoursCtrl.text.trim();
+                  final structuredHours = SchedulingService.structuredVisitingHours(rawHours);
+                  final chId = (existing?['id'] ?? 'chamber-${DateTime.now().millisecondsSinceEpoch}').toString();
+
                   final chamberData = {
-                    'id': existing?['id'] ??
-                        'chamber-${DateTime.now().millisecondsSinceEpoch}',
+                    'id': chId,
+                    'chamberId': chId,
                     'name': name,
                     'hospitalName': name,
                     'area': area.isEmpty ? 'Dhaka' : area,
-                    'visitingHours': hoursCtrl.text.trim(),
+                    'visitingHours': structuredHours,
+                    'visitingHoursDisplay': rawHours.isNotEmpty ? rawHours : 'Visiting hours not set',
                     'slotMinutes': (int.tryParse(slotCtrl.text.trim()) ?? 10).clamp(5, 15),
                     'fee': int.tryParse(feeCtrl.text.trim()) ?? 800,
+                    if (_doctorProfileId != null) 'ownerDoctorId': _doctorProfileId,
+                    if (_doctorProfileId != null) 'doctorIds': [_doctorProfileId],
+                    if (_doctorProfileId != null) 'members': {_doctorProfileId!: 'owner'},
+                    'aliases': [chId, name],
                     'hasOperator': existing?['hasOperator'] ?? false,
                     'operatorUid': existing?['operatorUid'],
                     'operatorName': existing?['operatorName'],
@@ -477,10 +487,19 @@ class _DoctorManagerScreenState extends State<DoctorManagerScreen> {
 
                   if (_doctorProfileId != null) {
                     try {
+                      final docName = user?.displayName ?? 'Doctor Specialist';
                       await FirebaseFirestore.instance
                           .collection('doctors')
                           .doc(_doctorProfileId)
-                          .set({'chambers': _chambers}, SetOptions(merge: true));
+                          .set({
+                            'chambers': _chambers,
+                            'name': docName,
+                            'name_lower': docName.toLowerCase(),
+                            'claimedByUid': user?.uid,
+                            'isClaimed': true,
+                            'status': 'active',
+                            'updatedAt': FieldValue.serverTimestamp(),
+                          }, SetOptions(merge: true));
 
                       final chId = (chamberData['id'] ?? '').toString();
                       if (chId.isNotEmpty) {
@@ -489,8 +508,12 @@ class _DoctorManagerScreenState extends State<DoctorManagerScreen> {
                             .doc(chId)
                             .set({
                               ...chamberData,
+                              'ownerDoctorId': _doctorProfileId,
+                              'doctorIds': [_doctorProfileId],
+                              'members': {_doctorProfileId!: 'owner'},
+                              'aliases': [chId, name],
                               'doctorId': _doctorProfileId,
-                              'doctorName': user?.displayName ?? 'Doctor',
+                              'doctorName': docName,
                               'updatedAt': FieldValue.serverTimestamp(),
                             }, SetOptions(merge: true));
                       }
