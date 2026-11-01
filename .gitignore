@@ -63,3 +63,12 @@ firestore-debug.log
 tools/serviceAccount.json
 CODEBASE_REPORT.md
 
+
+# Phase 0: local-only config and generated files
+**/google-services.json
+**/GoogleService-Info.plist
+*.keystore
+.env.*
+ios/Flutter/ephemeral/
+ios/Flutter/Generated.xcconfig
+ios/Flutter/flutter_export_environment.sh

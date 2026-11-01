@@ -107,8 +107,8 @@ function initFirebase() {
     try {
       const cfg = JSON.parse(fs.readFileSync(fbCliConfig, 'utf8'));
       if (cfg.tokens && cfg.tokens.refresh_token) {
-        let clientId = '563584335869-fgrhgmd47bqnekij5i8b5pr03ho849e6.apps.googleusercontent.com';
-        let clientSecret = 'j9iVZfS8kkCEFUPaAeJV0sA';
+        let clientId = process.env.FIREBASE_CLI_CLIENT_ID || '';
+        let clientSecret = process.env.FIREBASE_CLI_CLIENT_SECRET || '';
         try {
           const api = require(path.join(os.homedir(), 'AppData', 'Roaming', 'npm', 'node_modules', 'firebase-tools', 'lib', 'api.js'));
           clientId = api.clientId();

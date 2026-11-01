@@ -28,8 +28,8 @@ function initializeAdmin() {
   const refreshToken = firebaseConfig.tokens?.refresh_token;
   if (!refreshToken) throw new Error('Run firebase login before running this script.');
 
-  let clientId = '563584335869-fgrhgmd47bqnekij5i8b5pr03ho849e6.apps.googleusercontent.com';
-  let clientSecret = 'j9iVZfS8kkCEFUPaAeJV0sA';
+  let clientId = process.env.FIREBASE_CLI_CLIENT_ID || '';
+  let clientSecret = process.env.FIREBASE_CLI_CLIENT_SECRET || '';
   try {
     const api = require(path.join(
         os.homedir(), 'AppData', 'Roaming', 'npm', 'node_modules',
