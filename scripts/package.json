@@ -1,14 +1,12 @@
 {
-  "name": "doctordesk-firestore-migration",
+  "name": "doctordesk-scripts",
   "version": "1.0.0",
-  "description": "Firestore data migration scripts for DoctorDesk",
-  "main": "migrate_to_firestore.js",
+  "description": "Data and account maintenance scripts for DoctorDesk",
+  "private": true,
   "scripts": {
-    "migrate": "node migrate_to_firestore.js",
-    "backfill:chambers": "node migrate_to_firestore.js --chambers-only",
-    "bootstrap:owner": "node bootstrap_owner_admin.js",
-    "configure:android-google": "node configure_android_google_signin.js",
-    "backfill:search-index": "node backfill_search_index.js --apply"
+    "bundle:doctors": "node build_bundled_doctors.js",
+    "setup:accounts": "node setup_accounts.js",
+    "bootstrap:owner": "node bootstrap_owner_admin.js"
   },
   "dependencies": {
     "csv-parse": "^5.5.0",

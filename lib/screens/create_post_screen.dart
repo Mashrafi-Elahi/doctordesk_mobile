@@ -1,7 +1,4 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:firebase_storage/firebase_storage.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:youtube_player_flutter/youtube_player_flutter.dart';
 import '../services/auth_service.dart';
 import '../services/data_service.dart';
@@ -27,66 +24,9 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
   late String _selectedType;
   bool _isSubmitting = false;
 
-  File? _selectedImage;
-  final ImagePicker _picker = ImagePicker();
 
   YoutubePlayerController? _previewController;
   String? _previewVideoId;
-
-  Future<void> _pickImage(ImageSource source) async {
-    try {
-      final XFile? file = await _picker.pickImage(
-        source: source,
-        maxWidth: 1024,
-        maxHeight: 1024,
-        imageQuality: 70, // Optimized lowest bandwidth format
-      );
-      if (file != null && mounted) {
-        setState(() {
-          _selectedImage = File(file.path);
-        });
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not pick image: $e')),
-        );
-      }
-    }
-  }
-
-  void _showImageSourcePicker() {
-    showModalBottomSheet(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.photo_library_outlined),
-              title: const Text('Choose from Gallery'),
-              subtitle: const Text('Compressed to lowest bandwidth WebP/JPEG format'),
-              onTap: () {
-                Navigator.pop(ctx);
-                _pickImage(ImageSource.gallery);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.camera_alt_outlined),
-              title: const Text('Take a Photo'),
-              onTap: () {
-                Navigator.pop(ctx);
-                _pickImage(ImageSource.camera);
-              },
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 
   @override
   void initState() {
@@ -175,29 +115,11 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
               ? 'moderator'
               : (roles.isDoctor ? 'doctor' : (roles.isOperator ? 'operator' : 'patient')));
 
-      String? uploadedImageUrl;
-      if (_selectedImage != null) {
-        try {
-          final uid = user?.uid ?? 'guest';
-          final ts = DateTime.now().millisecondsSinceEpoch;
-          final ref = FirebaseStorage.instance
-              .ref('feed_posts/$uid/post_$ts.jpg');
-          final uploadTask = await ref.putFile(
-            _selectedImage!,
-            SettableMetadata(contentType: 'image/jpeg'),
-          );
-          uploadedImageUrl = await uploadTask.ref.getDownloadURL();
-        } catch (e) {
-          debugPrint('Error uploading image to storage: $e');
-        }
-      }
-
       await DataService.createFeedPost(
         type: _selectedType,
         title: _titleController.text.trim(),
         content: _contentController.text.trim(),
         youtubeUrl: _selectedType == 'video' ? _youtubeUrlController.text.trim() : null,
-        imageUrl: uploadedImageUrl,
         authorName: user?.displayName ?? (roles.isDoctor ? 'Dr. Specialist' : 'Community Member'),
         authorRole: role,
         isBmdcVerified: roles.isDoctor,
@@ -395,48 +317,6 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
               ),
               const SizedBox(height: 16),
 
-              // Image Attachment Section (lowest format / compressed for bandwidth saving)
-              if (_selectedImage != null)
-                Stack(
-                  children: [
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(12),
-                      child: Image.file(
-                        _selectedImage!,
-                        width: double.infinity,
-                        height: 200,
-                        fit: BoxFit.cover,
-                      ),
-                    ),
-                    Positioned(
-                      top: 8,
-                      right: 8,
-                      child: GestureDetector(
-                        onTap: () => setState(() => _selectedImage = null),
-                        child: Container(
-                          padding: const EdgeInsets.all(6),
-                          decoration: const BoxDecoration(
-                            color: Colors.black54,
-                            shape: BoxShape.circle,
-                          ),
-                          child: const Icon(Icons.close, color: Colors.white, size: 18),
-                        ),
-                      ),
-                    ),
-                  ],
-                )
-              else
-                OutlinedButton.icon(
-                  onPressed: _showImageSourcePicker,
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                  ),
-                  icon: const Icon(Icons.add_photo_alternate_outlined),
-                  label: const Text('Add Image / Scan (Optimized Low-Bandwidth Format)'),
-                ),
               const SizedBox(height: 24),
 
               // Submit Button

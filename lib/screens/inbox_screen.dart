@@ -19,6 +19,34 @@ class InboxScreen extends StatefulWidget {
 
 class _InboxScreenState extends State<InboxScreen> {
 
+  Future<void> _deleteForMe(BuildContext context, String uid, String chatId, String name) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await ChatService.hideChatForMe(uid, chatId);
+      messenger.showSnackBar(SnackBar(
+        content: Text('Chat with $name deleted'),
+        action: SnackBarAction(label: 'Undo', onPressed: () => ChatService.unhideChatForMe(uid, chatId)),
+      ));
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Could not delete: $e')));
+    }
+  }
+
+  Future<void> _confirmDelete(BuildContext context, String uid, String chatId, String name) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('Delete chat?'),
+        content: Text('The chat with $name is removed from your inbox only. It comes back if a new message arrives.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(c, true), child: const Text('Delete')),
+        ],
+      ),
+    );
+    if (ok == true && context.mounted) await _deleteForMe(context, uid, chatId, name);
+  }
+
   String _formatTime(DateTime dt) {
     final diff = DateTime.now().difference(dt);
     if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
@@ -61,7 +89,7 @@ class _InboxScreenState extends State<InboxScreen> {
               ),
             )
           : StreamBuilder<List<ChatSession>>(
-              stream: ChatService.streamUserChats(currentUid),
+              stream: ChatService.streamInbox(currentUid),
               builder: (context, snapshot) {
           if (snapshot.hasError) {
             return ErrorStateView.fromError(snapshot.error,
@@ -120,7 +148,18 @@ class _InboxScreenState extends State<InboxScreen> {
 
                     final otherUid = chat.participants.firstWhere((p) => p != currentUid, orElse: () => '');
 
-                    return ListTile(
+                    return Dismissible(
+                      key: ValueKey('inbox-${chat.id}'),
+                      direction: DismissDirection.endToStart,
+                      background: Container(
+                        color: Colors.red.shade600,
+                        alignment: Alignment.centerRight,
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        child: const Icon(Icons.delete_outline, color: Colors.white),
+                      ),
+                      onDismissed: (_) => _deleteForMe(context, currentUid, chat.id, otherName),
+                      child: ListTile(
+                      onLongPress: () => _confirmDelete(context, currentUid, chat.id, otherName),
                       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
                       leading: UserAvatar(uid: otherUid, name: otherName),
                       title: Row(
@@ -183,6 +222,7 @@ class _InboxScreenState extends State<InboxScreen> {
                           ),
                         );
                       },
+                    ),
                     );
                   },
                 );

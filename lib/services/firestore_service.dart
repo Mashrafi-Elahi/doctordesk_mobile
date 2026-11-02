@@ -38,12 +38,13 @@ class FirestoreService {
       return _cachedBundledMaps!;
     }
     final docs = await getBundledDoctors();
-    _cachedBundledMaps = docs.map((d) {
-      final m = d.toJson();
-      m['_id'] = d.id;
-      m['searchText'] = DoctorSearchIndex.fieldsFor(m)['searchText'];
-      return m;
-    }).toList();
+    // ~6,000 doctors: indexing them on the UI thread froze the screen.
+    _cachedBundledMaps = await Isolate.run(() => docs.map((d) {
+          final m = d.toJson();
+          m['_id'] = d.id;
+          m['searchText'] = DoctorSearchIndex.fieldsFor(m)['searchText'];
+          return m;
+        }).toList());
     return _cachedBundledMaps!;
   }
 
@@ -90,9 +91,12 @@ class FirestoreService {
   /// Every claimed (bookable) doctor. Few enough to load in one query, and
   /// needed so they can lead page 1 instead of sitting wherever their name
   /// sorts in the paginated list.
+  /// After an approval, list the newly claimed doctor right away.
+  static void invalidateClaimedDoctors() => _claimedDoctors = null;
+
   static Future<List<Doctor>> _loadClaimedDoctors() {
     if (_claimedDoctors == null ||
-        DateTime.now().difference(_claimedDoctorsAt) > const Duration(minutes: 5)) {
+        DateTime.now().difference(_claimedDoctorsAt) > const Duration(minutes: 1)) {
       _claimedDoctorsAt = DateTime.now();
       _claimedDoctors = _db
           .collection('doctors')
@@ -612,7 +616,15 @@ class FirestoreService {
     int page = 1,
     int limit = 20,
   }) async {
-    final allMaps = await _getIndexedBundledMaps();
+    final bundled = await _getIndexedBundledMaps();
+    // Claimed doctors live in Firestore with their real chambers (e.g. Bup
+    // Medical); the bundled directory alone never lists them.
+    final claimed = await _loadClaimedDoctors();
+    final claimedIds = claimed.map((d) => d.id).toSet();
+    final allMaps = [
+      ...claimed.map((d) => {...d.toJson(), '_id': d.id}),
+      ...bundled.where((m) => !claimedIds.contains((m['_id'] ?? m['id'] ?? '').toString())),
+    ];
     final normArea = areaFilter?.trim().toLowerCase();
 
     final List<Doctor> matched = await Isolate.run(() {
@@ -998,6 +1010,27 @@ class FirestoreService {
     return true;
   }
 
+  /// Finds the doctor a pasted Profile ID refers to (the app shows bundled
+  /// doctors as doctor_N while Firestore stores doc_N, as fetchDoctorById
+  /// handles). Null if none; otherwise its real id and 'claimed'/'unclaimed'.
+  static Future<({String id, String status})?> resolveDoctorForClaim(String raw) async {
+    final id = raw.trim();
+    if (id.isEmpty) return null;
+    final candidates = <String>{
+      id,
+      id.replaceFirst('doctor_', 'doc_'),
+      id.replaceFirst('doc_', 'doctor_'),
+      if (!id.startsWith('doc')) ...['doc_$id', 'doctor_$id'],
+    };
+    for (final candidate in candidates) {
+      final snap = await _db.collection('doctors').doc(candidate).get();
+      if (!snap.exists) continue;
+      final uid = (snap.data()?['claimedByUid'] ?? '').toString();
+      return (id: candidate, status: uid.isNotEmpty ? 'claimed' : 'unclaimed');
+    }
+    return null;
+  }
+
   /// Submits a claim request for a doctor profile.
   /// Creates a document in `claim_requests` with status 'pending'.
   /// No role is granted automatically (requires admin review & approval).
@@ -1182,10 +1215,8 @@ class FirestoreService {
       'doctorIds': FieldValue.arrayUnion([doctorId]),
       'doctorId': doctorId,
       'doctorName': docName,
+      // Chambers are public: who runs the desk lives only in chamber_operators.
       'hasOperator': true,
-      'operatorUid': operatorUid,
-      'operatorName': operatorName,
-      'operatorEmail': operatorEmail,
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
 
@@ -1198,7 +1229,6 @@ class FirestoreService {
       'chamberName': chamberName,
       'operatorUid': operatorUid,
       'operatorName': operatorName,
-      'operatorEmail': operatorEmail,
       'assignedByDoctorUid': _auth.currentUser?.uid,
       'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
@@ -1222,6 +1252,7 @@ class FirestoreService {
     }, SetOptions(merge: true));
 
     await batch.commit();
+    await _syncStaffChatFor(doctorId);
 
     // 4. Update the doctor document's chambers list
     if (docSnap.exists) {
@@ -1232,9 +1263,6 @@ class FirestoreService {
         final cName = cMap['id'] ?? cMap['hospitalName'] ?? cMap['name'];
         if (cName == chamberId || cMap['id'] == chamberId || cMap['hospitalName'] == chamberId) {
           cMap['hasOperator'] = true;
-          cMap['operatorUid'] = operatorUid;
-          cMap['operatorName'] = operatorName;
-          cMap['operatorEmail'] = operatorEmail;
         }
         return cMap;
       }).toList();
@@ -1275,6 +1303,28 @@ class FirestoreService {
     } catch (_) {}
   }
 
+  /// Keeps the doctor's one staff chat in step with chamber_operators.
+  static Future<void> _syncStaffChatFor(String doctorId) async {
+    try {
+      final docSnap = await _db.collection('doctors').doc(doctorId).get();
+      final doctorUid = (docSnap.data()?['claimedByUid'] ?? '').toString();
+      if (doctorUid.isEmpty) return;
+      final ops = await _db.collection('chamber_operators').where('doctorId', isEqualTo: doctorId).get();
+      await ChatService.syncStaffChat(
+        doctorId: doctorId,
+        doctorUid: doctorUid,
+        doctorName: (docSnap.data()?['name'] ?? 'Doctor').toString(),
+        operators: {
+          for (final d in ops.docs)
+            (d.data()['operatorUid'] ?? '').toString(): (d.data()['operatorName'] ?? 'Desk').toString(),
+        },
+        chamberId: ops.docs.isEmpty ? null : (ops.docs.first.data()['chamberId'] ?? '').toString(),
+      );
+    } catch (e) {
+      debugPrint('Staff chat sync failed for $doctorId: $e');
+    }
+  }
+
   static Future<void> removeChamberOperator({
     required String doctorId,
     required String chamberId,
@@ -1306,6 +1356,7 @@ class FirestoreService {
     }
 
     await batch.commit();
+    await _syncStaffChatFor(doctorId);
 
     // 3. Update doctor chambers
     final docRef = _db.collection('doctors').doc(doctorId);
@@ -1934,6 +1985,7 @@ class FirestoreService {
         },
         SetOptions(merge: true));
     await batch.commit();
+    invalidateClaimedDoctors();
     return doctorRef.id;
   }
 
@@ -2402,6 +2454,13 @@ class FirestoreService {
     final isPatient = !isDoctorQueueEntry && !isAssignedOperator && roles['isAdmin'] != true;
     final apptStatus = isPatient ? 'requested' : status;
 
+    final bookingDay = DateTime(scheduledTime.year, scheduledTime.month, scheduledTime.day);
+    if (bookingDay.isBefore(SchedulingService.today) ||
+        bookingDay.isAfter(SchedulingService.lastBookableDate)) {
+      throw StateError(
+          'Appointments can be booked for today and the next ${SchedulingService.bookingWindowDays - 1} days.');
+    }
+
     String resolvedChamberName = (chamberName ?? '').trim();
 
     // Look up canonical chamber record
@@ -2455,9 +2514,24 @@ class FirestoreService {
           throw StateError('This date is already fully booked.');
         }
       }
+      // One open appointment per patient per doctor. Once it is done,
+      // cancelled, rejected, declined or a no-show they may book again,
+      // the same day included.
+      final mine = await _db
+          .collection('appointments')
+          .where('userId', isEqualTo: uid)
+          .where('doctorId', isEqualTo: resolvedDoctorId)
+          .get();
+      final open = mine.docs.where((d) =>
+          !ApptStatus.terminal.contains(QueueService.normalizeStatus(d.data()['status'])));
+      if (open.isNotEmpty) {
+        throw StateError('You already have an open appointment with this doctor. '
+            'You can book again once it is done or cancelled.');
+      }
+      // A lock left behind by a finished appointment must not block a new one.
       final activeCheck = await activeBookingRef.get();
       if (activeCheck.exists) {
-        throw StateError('You already have a request for this doctor on this date.');
+        await activeBookingRef.delete();
       }
 
       await _db.runTransaction((tx) async {
@@ -2532,30 +2606,14 @@ class FirestoreService {
         );
       }
 
-      // 2. Exclusive notification: if operators exist, notify ONLY operators; if none, notify ONLY doctor. Never both. Never admin.
-      if (hasOperator) {
-        for (final opUid in operatorUids) {
-          await NotificationService.createNotification(
-            userId: opUid,
-            title: 'New Appointment Request',
-            body: '$patientName has requested an appointment on ${scheduledTime.day}/${scheduledTime.month}/${scheduledTime.year}.',
-            type: 'new_appointment_request',
-            relatedId: apptRef.id,
-          );
-        }
-      } else if (resolvedDoctorId != null && resolvedDoctorId.isNotEmpty) {
-        final docSnap = await _db.collection('doctors').doc(resolvedDoctorId).get();
-        final claimedByUid = (docSnap.data()?['claimedByUid'] ?? '').toString();
-        if (claimedByUid.isNotEmpty && claimedByUid != uid) {
-          await NotificationService.createNotification(
-            userId: claimedByUid,
-            title: 'New Appointment Request',
-            body: '$patientName has requested an appointment on ${scheduledTime.day}/${scheduledTime.month}/${scheduledTime.year}.',
-            type: 'new_appointment_request',
-            relatedId: apptRef.id,
-          );
-        }
-      }
+      // 2. Doctor and desk get it as an event in their staff chat.
+      final prefers = preferredTime == null ? '' : ', prefers ${SchedulingService.eventTime(preferredTime).split(', ').last}';
+      await ChatService.postAppointmentEvent(
+        doctorId: resolvedDoctorId ?? '',
+        appointmentId: apptRef.id,
+        text: '📅 New request: $patientName · ${resolvedChamberName.isEmpty ? 'Chamber' : resolvedChamberName} · '
+            '${SchedulingService.eventTime(scheduledTime).split(',').first}$prefers',
+      );
     } catch (_) {}
 
     return {
@@ -2654,6 +2712,12 @@ class FirestoreService {
       }
     } catch (_) {}
 
+    // Someone else may have claimed it since the request was made.
+    final current = (await doctorRef.get()).data()?['claimedByUid']?.toString() ?? '';
+    if (current.isNotEmpty && current != applicantUid) {
+      throw StateError('This profile is already claimed by another account.');
+    }
+
     final batch = _db.batch();
     batch.update(claimRef, {
       'status': 'approved',
@@ -2683,6 +2747,7 @@ class FirestoreService {
     }, SetOptions(merge: true));
 
     await batch.commit();
+    invalidateClaimedDoctors();
 
     try {
       await NotificationService.createNotification(

@@ -172,6 +172,12 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    // Per-user inbox hiding: "delete" a chat for yourself only. A newer
+    // message than hiddenAt brings it back; the shared chat is never deleted.
+    match /users/{uid}/inboxHidden/{chatId} {
+      allow read, write: if isOwner(uid);
+    }
+
     // 2. Doctors Collection
     // Public read; full create/delete admin only.
     match /doctors/{docId} {
@@ -537,9 +543,54 @@ service cloud.firestore {
            isAssignedOperatorFor(chatChamber(data), data.get('doctorId', null)));
       }
 
-      allow create: if isAuthenticated() && canUnlockChat(request.resource.data);
+      // The appointment belongs to the signed-in patient and to this doctor.
+      function isOwnAppointment(apptId, doctorId) {
+        let appt = get(/databases/$(database)/documents/appointments/$(apptId)).data;
+        return appt.userId == request.auth.uid && appt.doctorId == doctorId;
+      }
+      // A patient opens their own doctor–patient chat for a confirmed visit:
+      // fixed two participants, the doctor's real account, +20 messages max.
+      function isPatientConsultUnlock(data) {
+        let appt = getAfter(/databases/$(database)/documents/appointments/$(data.unlockedBy)).data;
+        return data.get('type', 'consult') != 'staff' &&
+          data.patientUid == request.auth.uid &&
+          data.participants == [data.patientUid, data.doctorUid] &&
+          appt.userId == request.auth.uid &&
+          appt.status == 'confirmed' &&
+          appt.doctorId == data.doctorId &&
+          get(/databases/$(database)/documents/doctors/$(data.doctorId)).data.get('claimedByUid', '') == data.doctorUid;
+      }
+      function isStaffChat() {
+        return resource.data.get('type', '') == 'staff';
+      }
+
+      allow create: if isAuthenticated() && (
+        canUnlockChat(request.resource.data) ||
+        (isPatientConsultUnlock(request.resource.data) && request.resource.data.messageLimit <= 20)
+      );
       allow update: if isAuthenticated() && (
         isAdmin() ||
+        // Patient re-opens their consult chat for a later confirmed visit.
+        (isPatientConsultUnlock(request.resource.data) &&
+         request.resource.data.participants == resource.data.participants &&
+         request.resource.data.messageLimit <= resource.data.get('messageLimit', 0) + 20 &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+           'status', 'expiresAt', 'messageLimit', 'messageCount', 'unlockedBy',
+           'unlockChamberId', 'lastMessage', 'updatedAt',
+           'participantNames', 'patientName', 'doctorName'])) ||
+        // The doctor manages who is in their staff chat.
+        (isStaffChat() && resource.data.doctorUid == request.auth.uid &&
+         request.resource.data.doctorUid == resource.data.doctorUid &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+           'participants', 'participantNames', 'participantRoles', 'status',
+           'updatedAt', 'chamberId', 'doctorName', 'messageCount'])) ||
+        // Appointment events bump the staff chat: from a member, or from the
+        // patient whose appointment it is.
+        (isStaffChat() &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+           'lastMessage', 'updatedAt', 'lastEventAppointmentId']) &&
+         (request.auth.uid in resource.data.participants ||
+          isOwnAppointment(request.resource.data.lastEventAppointmentId, resource.data.doctorId))) ||
         // Re-open after a later visit: only the expiry, limits, counters and
         // display fields may change; participants and doctor stay fixed.
         (canUnlockChat(request.resource.data) &&
@@ -563,6 +614,13 @@ service cloud.firestore {
         );
         allow create: if isAuthenticated() && (
           isAdmin() ||
+          // A patient's request/accept/cancel posts an event into the doctor's
+          // staff chat without being a member.
+          (request.resource.data.get('type', '') == 'system' &&
+           request.resource.data.senderUid == request.auth.uid &&
+           get(/databases/$(database)/documents/chats/$(chatId)).data.get('type', '') == 'staff' &&
+           isOwnAppointment(request.resource.data.appointmentId,
+             get(/databases/$(database)/documents/chats/$(chatId)).data.doctorId)) ||
           (
             request.resource.data.senderUid == request.auth.uid &&
             request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants &&

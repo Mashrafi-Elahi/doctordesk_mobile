@@ -5,6 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import '../widgets/doctor_claim_dialog.dart';
 import '../widgets/user_avatar.dart';
 import '../theme/app_constants.dart';
 import '../theme/app_theme.dart';
@@ -78,97 +79,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
       setState(() {
         _userRoles = roles;
       });
-    }
-  }
-
-  Future<void> _showDoctorApplicationDialog() async {
-    final phoneController = TextEditingController(
-        text: _userProfile?['phone'] ??
-            AuthService.currentUser?.phoneNumber ??
-            '');
-    final bmdcController = TextEditingController(
-        text: _userProfile?['bmdcRegNumber'] ??
-            _userProfile?['doctorApplication']?['bmdcNumber'] ??
-            '');
-
-    final result = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Row(
-          children: [
-            Icon(Icons.verified_user, color: Colors.blueAccent),
-            SizedBox(width: 8),
-            Text('Doctor Application', style: TextStyle(fontSize: 16)),
-          ],
-        ),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Doctor role is allocated via database. Enter your phone number and BMDC registration number.',
-                style: TextStyle(fontSize: 12.5, color: Colors.grey),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: phoneController,
-                decoration: const InputDecoration(
-                  labelText: 'Doctor Phone Number (Required)',
-                  hintText: 'e.g. 017XXXXXXXX',
-                  border: OutlineInputBorder(),
-                  isDense: true,
-                ),
-                keyboardType: TextInputType.phone,
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: bmdcController,
-                decoration: const InputDecoration(
-                  labelText: 'BMDC Registration Number (Optional)',
-                  hintText: 'e.g. A-12345',
-                  border: OutlineInputBorder(),
-                  isDense: true,
-                ),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
-          FilledButton(
-            onPressed: () {
-              if (phoneController.text.trim().isEmpty) return;
-              Navigator.pop(ctx, true);
-            },
-            child: const Text('Submit Application'),
-          ),
-        ],
-      ),
-    );
-
-    if (result == true && mounted) {
-      final uid = AuthService.currentUser?.uid;
-      if (uid != null) {
-        await DataService.applyForDoctorRole(
-          uid: uid,
-          phone: phoneController.text.trim(),
-          bmdcNumber: bmdcController.text.trim(),
-          name: AuthService.currentUser?.displayName,
-        );
-        await _loadUserRoles();
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                  'Doctor application submitted! Admin will review and verify your BMDC.'),
-              behavior: SnackBarBehavior.floating,
-            ),
-          );
-        }
-      }
     }
   }
 
@@ -786,7 +696,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             ),
                             visualDensity: VisualDensity.compact,
                           ),
-                          onPressed: _showDoctorApplicationDialog,
+                          onPressed: () async {
+                            if (await showDoctorClaimDialog(context)) await _loadUserRoles();
+                          },
                           child: const Text('Apply'),
                         ),
                       ],

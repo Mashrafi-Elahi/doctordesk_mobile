@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 
+import 'chat_service.dart';
 import 'notification_service.dart';
 
 /// Appointment lifecycle statuses. Legacy values ('in_progress', 'completed')
@@ -382,11 +383,14 @@ class QueueService {
   /// proposed -> confirmed (takes a token) or declined (frees the slot).
   static Future<void> respondToProposal(String appointmentId, {required bool accept}) async {
     final apptRef = _db.collection('appointments').doc(appointmentId);
-    String notifyUid = '';
     String patientName = 'Patient';
+    String doctorId = '';
+    String chamberName = '';
     DateTime? when;
     int? token;
     String? slotId;
+    String? activeKey;
+    (DocumentReference<Map<String, dynamic>>, Map<String, dynamic>)? consultChat;
 
     await _db.runTransaction((tx) async {
       final apptSnap = await tx.get(apptRef);
@@ -396,9 +400,11 @@ class QueueService {
       if (normalizeStatus(appt['status']) != ApptStatus.proposed) {
         throw StateError('This proposal is no longer open.');
       }
-      notifyUid = (appt['proposedBy'] ?? '').toString();
       patientName = (appt['patientName'] ?? patientName).toString();
+      doctorId = (appt['doctorId'] ?? '').toString();
+      chamberName = (appt['chamberName'] ?? '').toString();
       slotId = appt['slotId']?.toString();
+      activeKey = appt['activeBookingKey']?.toString();
       when = _date(appt['proposedTime']);
 
       if (!accept) {
@@ -410,7 +416,26 @@ class QueueService {
         return;
       }
       if (when == null) throw StateError('The proposal has no time.');
+      // Read before any write: the doctor's account for the consult chat.
+      final doctorSnap = await tx.get(_db.collection('doctors').doc(doctorId));
+      final doctorUid = (doctorSnap.data()?['claimedByUid'] ?? '').toString();
       token = await assignToken(tx, appt: appt, appointmentId: appointmentId, slot: when!);
+      final patientUid = (appt['userId'] ?? '').toString();
+      if (patientUid.isNotEmpty && doctorUid.isNotEmpty) {
+        consultChat = (
+          _db.collection('chats').doc(ChatService.generateChatId(patientUid, doctorUid)),
+          ChatService.consultChatOnConfirm(
+            patientUid: patientUid,
+            doctorUid: doctorUid,
+            patientName: patientName,
+            doctorName: (appt['doctorName'] ?? 'Doctor').toString(),
+            doctorId: doctorId,
+            chamberId: (appt['chamberId'] ?? '').toString(),
+            appointmentId: appointmentId,
+            visit: when!,
+          ),
+        );
+      }
       tx.update(apptRef, {
         'status': to,
         'scheduledTime': Timestamp.fromDate(when!),
@@ -422,6 +447,14 @@ class QueueService {
       });
     });
 
+    // Best effort: a refused chat write must never undo the confirmation.
+    if (consultChat != null) {
+      try {
+        await consultChat!.$1.set(consultChat!.$2, SetOptions(merge: true));
+      } catch (e) {
+        debugPrint('Consult chat not opened: $e');
+      }
+    }
     if (!accept && slotId != null && slotId!.isNotEmpty) {
       try {
         await _db.collection('doctor_slots').doc(slotId).delete();
@@ -429,26 +462,33 @@ class QueueService {
         debugPrint('Could not free declined slot: $e');
       }
     }
-    if (notifyUid.isNotEmpty) {
-      await _notify(
-        notifyUid,
-        title: accept ? 'Proposal accepted' : 'Proposal declined',
-        body: accept
-            ? '$patientName confirmed ${when == null ? '' : _fmt(when!)} (token #$token).'
-            : '$patientName declined the proposed time.',
-        type: accept ? 'appointment_confirmed_by_patient' : 'appointment_declined',
-        relatedId: appointmentId,
-      );
+    if (!accept && activeKey != null && activeKey!.isNotEmpty) {
+      // Declining frees the patient to book this doctor again.
+      try {
+        await _db.collection('active_bookings').doc(activeKey).delete();
+      } catch (_) {}
     }
+    // Doctor and desk hear about it in their staff chat (with a notification).
+    await ChatService.postAppointmentEvent(
+      doctorId: doctorId,
+      appointmentId: appointmentId,
+      text: accept
+          ? '✅ Confirmed by patient: $patientName · token #$token · ${when == null ? '' : _fmt(when!)}${chamberName.isEmpty ? '' : ' · $chamberName'}'
+          : '↩️ Declined by patient: $patientName${when == null ? '' : ' · was ${_fmt(when!)}'}',
+    );
   }
 
   /// Patient cancels: also gives up their place in the waiting list.
   static Future<void> cancelByPatient(String appointmentId) async {
     final apptRef = _db.collection('appointments').doc(appointmentId);
+    String doctorId = '';
+    String patientName = 'Patient';
     await _db.runTransaction((tx) async {
       final apptSnap = await tx.get(apptRef);
       if (!apptSnap.exists) throw StateError('Appointment not found.');
       final appt = apptSnap.data()!;
+      doctorId = (appt['doctorId'] ?? '').toString();
+      patientName = (appt['patientName'] ?? patientName).toString();
       final from = normalizeStatus(appt['status']);
       if (!const {ApptStatus.requested, ApptStatus.proposed, ApptStatus.confirmed}
           .contains(from)) {
@@ -461,6 +501,11 @@ class QueueService {
         'updatedAt': FieldValue.serverTimestamp(),
       });
     });
+    await ChatService.postAppointmentEvent(
+      doctorId: doctorId,
+      appointmentId: appointmentId,
+      text: '❌ Cancelled by patient: $patientName',
+    );
   }
 
   // ---------------------------------------------------------------------------

@@ -86,7 +86,9 @@ class _DoctorManagerScreenState extends State<DoctorManagerScreen> {
           await prefs.setString(cacheKey, jsonEncode(_chambers));
         }
       } else {
-        _doctorProfileId = 'doctor_${user.uid}';
+        // No linked profile (e.g. an admin): never invent doctor_{uid}, or
+        // the account starts owning chambers and receiving their events.
+        _doctorProfileId = null;
         _doctorName = user.displayName ?? 'Dr. Specialist';
       }
     } catch (e) {

@@ -73,3 +73,7 @@ ios/Flutter/ephemeral/
 ios/Flutter/Generated.xcconfig
 ios/Flutter/flutter_export_environment.sh
 functions/node_modules/
+
+# Local agent notes
+AGENT.md
+.agents/

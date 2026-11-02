@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:youtube_player_flutter/youtube_player_flutter.dart';
 import '../theme/app_constants.dart';
+import '../models/user_role.dart';
 import '../services/auth_service.dart';
 import '../services/data_service.dart';
 import '../services/app_language.dart';
@@ -59,8 +60,6 @@ class _FeedScreenState extends State<FeedScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
     final roles = AuthService.userRoles;
     final canPostMedia = roles.canPostVideo;
     final typeFilter = _mapFilterToType(_selectedFilter);
@@ -86,50 +85,6 @@ class _FeedScreenState extends State<FeedScreen> {
       ),
       body: Column(
         children: [
-          // Inline composer banner
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-            child: Card(
-              elevation: 0.5,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(14),
-                side: BorderSide(
-                    color: colorScheme.primary.withValues(alpha: 0.25)),
-              ),
-              child: InkWell(
-                borderRadius: BorderRadius.circular(14),
-                onTap: () => _openCreatePost(
-                  initialType: canPostMedia ? 'video' : 'question',
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 14.0, vertical: 10.0),
-                  child: Row(
-                    children: [
-                      const UserAvatar.me(radius: 16),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Text(
-                          canPostMedia
-                              ? 'Share clinical guidance or YouTube video...'
-                              : 'Ask a specialist a medical question...',
-                          style: TextStyle(
-                              color: Colors.grey.shade600, fontSize: 13),
-                        ),
-                      ),
-                      FilledButton.tonal(
-                        onPressed: () => _openCreatePost(
-                          initialType: canPostMedia ? 'video' : 'question',
-                        ),
-                        child: Text(canPostMedia ? 'Post' : 'Ask'),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-
           // Feed Category Filters
           Padding(
             padding:
@@ -481,7 +436,13 @@ class _FeedCard extends StatelessWidget {
     final canDelete = roles.isAdmin ||
         roles.isModerator ||
         (currentUid != null && currentUid == authorUid);
-    final canAnswer = roles.canAnswerFaq;
+    // Answers come from the portal you're in, not the roles you hold: a doctor
+    // browsing as a patient must switch to the Doctor portal first.
+    final active = AuthService.activeRole;
+    final canAnswer = (roles.isDoctor && active == UserRole.doctor) ||
+        (roles.isAdmin && active == UserRole.admin) ||
+        (roles.isModerator && active != UserRole.patient);
+    final mustSwitchToAnswer = !canAnswer && roles.isDoctor;
     final canRetractAnswer = (answer != null &&
             currentUid != null &&
             answer['authorUid'] == currentUid) ||
@@ -724,7 +685,10 @@ class _FeedCard extends StatelessWidget {
                           style: FilledButton.styleFrom(
                               visualDensity: VisualDensity.compact),
                           child: const Text('Answer'),
-                        ),
+                        )
+                      else if (mustSwitchToAnswer)
+                        Text('Switch to Doctor portal to answer',
+                            style: TextStyle(fontSize: 11, color: Colors.amber.shade900)),
                     ],
                   ),
                 ),
@@ -743,14 +707,6 @@ class _FeedCard extends StatelessWidget {
                     style: const TextStyle(fontSize: 12.5),
                   ),
                 ),
-                const Spacer(),
-                if (type == 'question' && answer == null && canAnswer)
-                  OutlinedButton.icon(
-                    onPressed: () => _showAnswerDialog(context),
-                    icon: const Icon(Icons.medical_services_outlined, size: 16),
-                    label: const Text('Provide Answer',
-                        style: TextStyle(fontSize: 12)),
-                  ),
               ],
             ),
           ],

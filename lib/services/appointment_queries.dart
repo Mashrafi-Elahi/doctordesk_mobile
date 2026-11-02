@@ -62,57 +62,62 @@ class AppointmentQueries {
         .orderBy('createdAt', descending: false);
   }
 
-  /// Today's active queue for an operator chamber and doctor:
-  /// status in ApptStatus.active + scheduledTime within today.
-  static Query<Map<String, dynamic>> todayQueueForChamberAndDoctor(
-      String chamberId, String doctorId) {
-    final now = DateTime.now();
-    final startOfDay = DateTime(now.year, now.month, now.day);
-    final endOfDay = startOfDay.add(const Duration(days: 1));
-    return _db
-        .collection('appointments')
-        .where('chamberId', isEqualTo: chamberId)
-        .where('doctorId', isEqualTo: doctorId)
+  /// Active appointments scheduled in [from, to), filtered by chamber and/or
+  /// doctor. Every desk queue view goes through here so they share indexes.
+  static Query<Map<String, dynamic>> activeBetween({
+    String? chamberId,
+    String? doctorId,
+    required DateTime from,
+    required DateTime to,
+  }) {
+    Query<Map<String, dynamic>> q = _db.collection('appointments');
+    if (chamberId != null && chamberId.isNotEmpty) {
+      q = q.where('chamberId', isEqualTo: chamberId);
+    }
+    if (doctorId != null && doctorId.isNotEmpty) {
+      q = q.where('doctorId', isEqualTo: doctorId);
+    }
+    return q
         .where('status', whereIn: ApptStatus.active)
-        .where('scheduledTime',
-            isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
-        .where('scheduledTime', isLessThan: Timestamp.fromDate(endOfDay))
+        .where('scheduledTime', isGreaterThanOrEqualTo: Timestamp.fromDate(from))
+        .where('scheduledTime', isLessThan: Timestamp.fromDate(to))
         .orderBy('scheduledTime');
   }
+
+  /// Active queue on one [day] for a chamber (optionally one doctor there).
+  static Query<Map<String, dynamic>> queueForChamberOnDay(String chamberId, DateTime day,
+      {String? doctorId}) {
+    final start = DateTime(day.year, day.month, day.day);
+    return activeBetween(
+      chamberId: chamberId,
+      doctorId: doctorId,
+      from: start,
+      to: start.add(const Duration(days: 1)),
+    );
+  }
+
+  /// Active queue on one [day] for a doctor across all chambers.
+  static Query<Map<String, dynamic>> queueForDoctorOnDay(String doctorProfileId, DateTime day) {
+    final start = DateTime(day.year, day.month, day.day);
+    return activeBetween(
+      doctorId: doctorProfileId,
+      from: start,
+      to: start.add(const Duration(days: 1)),
+    );
+  }
+
+  /// Today's active queue for an operator chamber and doctor.
+  static Query<Map<String, dynamic>> todayQueueForChamberAndDoctor(
+          String chamberId, String doctorId) =>
+      queueForChamberOnDay(chamberId, DateTime.now(), doctorId: doctorId);
 
   /// Today's active queue for an operator chamber.
-  static Query<Map<String, dynamic>> todayQueueForChamber(String chamberId, {String? doctorId}) {
-    if (doctorId != null && doctorId.isNotEmpty) {
-      return todayQueueForChamberAndDoctor(chamberId, doctorId);
-    }
-    final now = DateTime.now();
-    final startOfDay = DateTime(now.year, now.month, now.day);
-    final endOfDay = startOfDay.add(const Duration(days: 1));
-    return _db
-        .collection('appointments')
-        .where('chamberId', isEqualTo: chamberId)
-        .where('status', whereIn: ApptStatus.active)
-        .where('scheduledTime',
-            isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
-        .where('scheduledTime', isLessThan: Timestamp.fromDate(endOfDay))
-        .orderBy('scheduledTime');
-  }
+  static Query<Map<String, dynamic>> todayQueueForChamber(String chamberId, {String? doctorId}) =>
+      queueForChamberOnDay(chamberId, DateTime.now(), doctorId: doctorId);
 
   /// Today's active queue for a doctor across all chambers.
-  static Query<Map<String, dynamic>> todayQueueForDoctor(
-      String doctorProfileId) {
-    final now = DateTime.now();
-    final startOfDay = DateTime(now.year, now.month, now.day);
-    final endOfDay = startOfDay.add(const Duration(days: 1));
-    return _db
-        .collection('appointments')
-        .where('doctorId', isEqualTo: doctorProfileId)
-        .where('status', whereIn: ApptStatus.active)
-        .where('scheduledTime',
-            isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
-        .where('scheduledTime', isLessThan: Timestamp.fromDate(endOfDay))
-        .orderBy('scheduledTime');
-  }
+  static Query<Map<String, dynamic>> todayQueueForDoctor(String doctorProfileId) =>
+      queueForDoctorOnDay(doctorProfileId, DateTime.now());
 
   /// Completed appointments for one chamber and doctor.
   static Query<Map<String, dynamic>> completedForChamberAndDoctor(

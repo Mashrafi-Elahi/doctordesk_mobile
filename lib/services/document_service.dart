@@ -13,19 +13,33 @@ class HealthFolder {
   final String name;
   final String category; // 'Prescriptions', 'Lab reports', 'Scans', 'Bills', 'Other'
   final DateTime createdAt;
+  /// Containing folder. Null only for the root folder.
+  final String? parentId;
 
   HealthFolder({
     required this.id,
     required this.name,
     required this.category,
     required this.createdAt,
+    this.parentId,
   });
+
+  bool get isRoot => id == DocumentService.rootFolderId;
+
+  HealthFolder copyWith({String? name, String? parentId}) => HealthFolder(
+    id: id,
+    name: name ?? this.name,
+    category: category,
+    createdAt: createdAt,
+    parentId: parentId ?? this.parentId,
+  );
 
   factory HealthFolder.fromJson(Map<String, dynamic> json) => HealthFolder(
     id: json['id'] as String,
     name: json['name'] as String,
     category: json['category'] as String? ?? 'Other',
     createdAt: DateTime.tryParse(json['createdAt'] as String? ?? '') ?? DateTime.now(),
+    parentId: json['parentId'] as String?,
   );
 
   Map<String, dynamic> toJson() => {
@@ -33,6 +47,7 @@ class HealthFolder {
     'name': name,
     'category': category,
     'createdAt': createdAt.toIso8601String(),
+    if (parentId != null) 'parentId': parentId,
   };
 }
 
@@ -56,6 +71,17 @@ class HealthDocument {
     this.mimeType = 'image/jpeg',
     this.sizeBytes = 0,
   });
+
+  HealthDocument copyWith({String? folderId}) => HealthDocument(
+    id: id,
+    folderId: folderId ?? this.folderId,
+    title: title,
+    category: category,
+    date: date,
+    localPath: localPath,
+    mimeType: mimeType,
+    sizeBytes: sizeBytes,
+  );
 
   factory HealthDocument.fromJson(Map<String, dynamic> json) => HealthDocument(
     id: json['id'] as String,
@@ -89,15 +115,21 @@ class DocumentService {
     'Other',
   ];
 
-  static String get _foldersKey {
-    final uid = FirebaseAuth.instance.currentUser?.uid ?? 'guest';
-    return 'health_folders_$uid';
-  }
+  /// Every account gets one ready-made folder that holds all other folders
+  /// and files. Storage keys are per account, so a fixed id is enough.
+  static const String rootFolderId = 'folder_root';
+  static const String rootFolderName = 'My Health Records';
 
-  static String get _docsKey {
-    final uid = FirebaseAuth.instance.currentUser?.uid ?? 'guest';
-    return 'health_documents_$uid';
-  }
+  /// Lets tests run without Firebase.
+  @visibleForTesting
+  static String? debugUid;
+
+  static String get _uid =>
+      debugUid ?? FirebaseAuth.instance.currentUser?.uid ?? 'guest';
+
+  static String get _foldersKey => 'health_folders_$_uid';
+
+  static String get _docsKey => 'health_documents_$_uid';
 
   static final ImagePicker _picker = ImagePicker();
 
@@ -112,7 +144,7 @@ class DocumentService {
 
   // ── Folders Management ─────────────────────────────────────────────────────
 
-  static Future<List<HealthFolder>> loadFolders() async {
+  static Future<List<HealthFolder>> _readFolders() async {
     try {
       final prefs = await SharedPreferences.getInstance();
       final raw = prefs.getString(_foldersKey);
@@ -120,12 +152,128 @@ class DocumentService {
       final List<dynamic> list = jsonDecode(raw);
       return list
           .map((e) => HealthFolder.fromJson(e as Map<String, dynamic>))
-          .toList()
-        ..sort((a, b) => a.name.compareTo(b.name));
+          .toList();
     } catch (e) {
       debugPrint('[DocumentService] Error loading folders: $e');
       return [];
     }
+  }
+
+  /// Loads all folders, creating the root folder on first use and moving
+  /// anything without a valid parent (data saved before folders could nest)
+  /// into it.
+  static Future<List<HealthFolder>> loadFolders() async {
+    final tree = normalizeTree(await _readFolders(), await _readDocuments());
+    if (tree.foldersChanged) await _saveFolders(tree.folders);
+    if (tree.docsChanged) await _saveDocuments(tree.docs);
+    return tree.folders..sort((a, b) => a.name.compareTo(b.name));
+  }
+
+  /// Makes sure the root exists, every other folder sits under an existing
+  /// parent with no cycles, and every document is in an existing folder.
+  /// Anything that breaks those rules is moved into the root.
+  @visibleForTesting
+  static ({
+    List<HealthFolder> folders,
+    List<HealthDocument> docs,
+    bool foldersChanged,
+    bool docsChanged,
+  }) normalizeTree(List<HealthFolder> folders, List<HealthDocument> docs) {
+    var foldersChanged = false;
+    final out = List<HealthFolder>.of(folders);
+
+    final rootIdx = out.indexWhere((f) => f.isRoot);
+    if (rootIdx == -1) {
+      out.add(HealthFolder(
+        id: rootFolderId,
+        name: rootFolderName,
+        category: 'Other',
+        createdAt: DateTime.now(),
+      ));
+      foldersChanged = true;
+    } else if (out[rootIdx].parentId != null) {
+      final r = out[rootIdx];
+      out[rootIdx] = HealthFolder(
+        id: r.id,
+        name: r.name,
+        category: r.category,
+        createdAt: r.createdAt,
+      );
+      foldersChanged = true;
+    }
+
+    final ids = out.map((f) => f.id).toSet();
+    for (var i = 0; i < out.length; i++) {
+      final f = out[i];
+      if (f.isRoot) continue;
+      if (f.parentId == null || f.parentId == f.id || !ids.contains(f.parentId)) {
+        out[i] = f.copyWith(parentId: rootFolderId);
+        foldersChanged = true;
+      }
+    }
+
+    // A cycle (a -> b -> a) would make those folders unreachable.
+    final byId = {for (final f in out) f.id: f};
+    for (var i = 0; i < out.length; i++) {
+      final seen = <String>{out[i].id};
+      var cur = out[i].parentId;
+      while (cur != null && cur != rootFolderId) {
+        if (!seen.add(cur)) {
+          out[i] = out[i].copyWith(parentId: rootFolderId);
+          byId[out[i].id] = out[i];
+          foldersChanged = true;
+          break;
+        }
+        cur = byId[cur]?.parentId;
+      }
+    }
+
+    var docsChanged = false;
+    final outDocs = List<HealthDocument>.of(docs);
+    for (var i = 0; i < outDocs.length; i++) {
+      final d = outDocs[i];
+      if (d.folderId == null || !ids.contains(d.folderId)) {
+        outDocs[i] = d.copyWith(folderId: rootFolderId);
+        docsChanged = true;
+      }
+    }
+
+    return (
+      folders: out,
+      docs: outDocs,
+      foldersChanged: foldersChanged,
+      docsChanged: docsChanged,
+    );
+  }
+
+  /// Folders from the root down to [folderId], for a breadcrumb.
+  static List<HealthFolder> pathTo(String folderId, List<HealthFolder> folders) {
+    final byId = {for (final f in folders) f.id: f};
+    final path = <HealthFolder>[];
+    final seen = <String>{};
+    String? cur = folderId;
+    while (cur != null && seen.add(cur)) {
+      final f = byId[cur];
+      if (f == null) break;
+      path.insert(0, f);
+      cur = f.parentId;
+    }
+    return path;
+  }
+
+  /// [folderId] and every folder nested anywhere under it.
+  static Set<String> subtreeIds(String folderId, List<HealthFolder> folders) {
+    final ids = <String>{folderId};
+    var added = true;
+    while (added) {
+      added = false;
+      for (final f in folders) {
+        if (f.parentId != null && ids.contains(f.parentId) && ids.add(f.id)) {
+          added = true;
+        }
+      }
+    }
+    return ids;
   }
 
   static Future<void> _saveFolders(List<HealthFolder> folders) async {
@@ -139,15 +287,16 @@ class DocumentService {
   static Future<HealthFolder> createFolder({
     required String name,
     required String category,
+    String parentId = rootFolderId,
   }) async {
-    final id = 'folder_${DateTime.now().millisecondsSinceEpoch}';
+    final list = await loadFolders();
     final folder = HealthFolder(
-      id: id,
+      id: 'folder_${DateTime.now().microsecondsSinceEpoch}',
       name: name.trim(),
       category: categories.contains(category) ? category : 'Other',
       createdAt: DateTime.now(),
+      parentId: list.any((f) => f.id == parentId) ? parentId : rootFolderId,
     );
-    final list = await loadFolders();
     list.add(folder);
     await _saveFolders(list);
     return folder;
@@ -160,37 +309,32 @@ class DocumentService {
     final list = await loadFolders();
     final idx = list.indexWhere((f) => f.id == folderId);
     if (idx != -1) {
-      final f = list[idx];
-      list[idx] = HealthFolder(
-        id: f.id,
-        name: newName.trim(),
-        category: f.category,
-        createdAt: f.createdAt,
-      );
+      list[idx] = list[idx].copyWith(name: newName.trim());
       await _saveFolders(list);
     }
   }
 
+  /// Deletes the folder and moves its files and subfolders up into its
+  /// parent. The root folder cannot be deleted.
   static Future<void> deleteFolder({required String folderId}) async {
-    // Delete folder and move its files to root (folderId: null)
+    if (folderId == rootFolderId) return;
     final folders = await loadFolders();
-    folders.removeWhere((f) => f.id == folderId);
+    final idx = folders.indexWhere((f) => f.id == folderId);
+    if (idx == -1) return;
+    final parentId = folders[idx].parentId ?? rootFolderId;
+    folders.removeAt(idx);
+    for (var i = 0; i < folders.length; i++) {
+      if (folders[i].parentId == folderId) {
+        folders[i] = folders[i].copyWith(parentId: parentId);
+      }
+    }
     await _saveFolders(folders);
 
-    final docs = await loadLocalDocuments();
-    bool changed = false;
-    for (int i = 0; i < docs.length; i++) {
+    final docs = await _readDocuments();
+    var changed = false;
+    for (var i = 0; i < docs.length; i++) {
       if (docs[i].folderId == folderId) {
-        docs[i] = HealthDocument(
-          id: docs[i].id,
-          folderId: null,
-          title: docs[i].title,
-          category: docs[i].category,
-          date: docs[i].date,
-          localPath: docs[i].localPath,
-          mimeType: docs[i].mimeType,
-          sizeBytes: docs[i].sizeBytes,
-        );
+        docs[i] = docs[i].copyWith(folderId: parentId);
         changed = true;
       }
     }
@@ -201,7 +345,11 @@ class DocumentService {
 
   // ── Documents Management ───────────────────────────────────────────────────
 
-  static Future<List<HealthDocument>> loadLocalDocuments() async {
+  /// Loads all documents. Call [loadFolders] first so documents saved
+  /// without a folder have been moved into the root folder.
+  static Future<List<HealthDocument>> loadLocalDocuments() => _readDocuments();
+
+  static Future<List<HealthDocument>> _readDocuments() async {
     try {
       final prefs = await SharedPreferences.getInstance();
       final raw = prefs.getString(_docsKey);
@@ -225,7 +373,8 @@ class DocumentService {
     );
   }
 
-  /// Saves a picked file into local app documents directory
+  /// Saves a picked file into local app documents directory.
+  /// Without [folderId] it goes into the root folder.
   static Future<HealthDocument> saveLocalDocument({
     required String title,
     required String category,
@@ -251,7 +400,7 @@ class DocumentService {
 
     final doc = HealthDocument(
       id: id,
-      folderId: folderId,
+      folderId: folderId ?? rootFolderId,
       title: title.trim(),
       category: categories.contains(category) ? category : 'Other',
       date: date,
@@ -289,22 +438,12 @@ class DocumentService {
 
   static Future<void> moveDocument({
     required String documentId,
-    required String? newFolderId,
+    required String newFolderId,
   }) async {
     final docs = await loadLocalDocuments();
     final idx = docs.indexWhere((d) => d.id == documentId);
     if (idx != -1) {
-      final d = docs[idx];
-      docs[idx] = HealthDocument(
-        id: d.id,
-        folderId: newFolderId,
-        title: d.title,
-        category: d.category,
-        date: d.date,
-        localPath: d.localPath,
-        mimeType: d.mimeType,
-        sizeBytes: d.sizeBytes,
-      );
+      docs[idx] = docs[idx].copyWith(folderId: newFolderId);
       await _saveDocuments(docs);
     }
   }

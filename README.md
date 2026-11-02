@@ -78,8 +78,23 @@ DoctorDesk is an end-to-end healthcare coordination platform built with Flutter 
 
 ## 📄 Documentation
 
-Historical project logs and migration audits are located in the `docs/` directory:
-- [`docs/PROGRESS.md`](docs/PROGRESS.md)
-- [`docs/CHANGES.md`](docs/CHANGES.md)
+- [`docs/SRS.md`](docs/SRS.md) — requirements specification
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — architecture guide
+- [`docs/SCHEDULING_ALGORITHM.md`](docs/SCHEDULING_ALGORITHM.md) — per-doctor daily queue and appointment lifecycle
+- [`docs/adr/`](docs/adr/) — architecture decision records
 - [`docs/KNOWN_ISSUES.md`](docs/KNOWN_ISSUES.md)
-- [`docs/REVIEW.md`](docs/REVIEW.md)
+- [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md)
+
+Project history (old progress logs, reviews, one-off migration scripts) lives in git history.
+
+---
+
+## 🧰 Admin Scripts (`scripts/`)
+
+Node scripts for data and account maintenance (`npm --prefix scripts install` first). Admin scripts need a service-account key (never committed):
+
+- `npm --prefix scripts run bundle:doctors` — rebuild `assets/data/bundled_doctors.json` (`build_bundled_doctors.js`)
+- `npm --prefix scripts run setup:accounts` — dry-run demo role account setup; add `-- --apply` to write (`setup_accounts.js`)
+- `npm --prefix scripts run bootstrap:owner` — grant the owner admin role (`bootstrap_owner_admin.js`)
+
+`doctordirectory/bundled_doctors_backup.json` is a backup of the bundled directory data.

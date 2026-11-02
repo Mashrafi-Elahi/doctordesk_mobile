@@ -49,6 +49,21 @@ class _FirstTimeCheckinContentState extends State<_FirstTimeCheckinContent> {
   String? _selectedMood = 'good';
   bool _detectingGps = false;
   String? _gpsMessage;
+  // Hidden unless a GPS fix can work; see DeviceLocation.available.
+  bool _gpsAvailable = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _refreshGpsAvailability();
+  }
+
+  Future<void> _refreshGpsAvailability() async {
+    final available = await DeviceLocation.available();
+    if (mounted && available != _gpsAvailable) {
+      setState(() => _gpsAvailable = available);
+    }
+  }
 
   final List<Map<String, dynamic>> _areas = DhakaLocations.all
       .map((location) => {
@@ -232,20 +247,28 @@ class _FirstTimeCheckinContentState extends State<_FirstTimeCheckinContent> {
                   );
                 }).toList(),
               ),
-              const SizedBox(height: 8),
-              OutlinedButton.icon(
-                icon: _detectingGps
-                    ? const SizedBox(
-                        height: 16,
-                        width: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.my_location, size: 16),
-                label: Text(_detectingGps
-                    ? 'Detecting GPS...'
-                    : 'Use Current GPS Location'),
-                onPressed: _detectingGps ? null : _detectGpsLocation,
-              ),
+              if (_gpsAvailable || _detectingGps) ...[
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  icon: _detectingGps
+                      ? const SizedBox(
+                          height: 16,
+                          width: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.my_location, size: 16),
+                  label: Text(_detectingGps
+                      ? 'Detecting GPS...'
+                      : 'Use Current GPS Location'),
+                  onPressed: _detectingGps
+                      ? null
+                      : () async {
+                          await _detectGpsLocation();
+                          // Hide the option once it has just failed.
+                          await _refreshGpsAvailability();
+                        },
+                ),
+              ],
               if (_gpsMessage != null) ...[
                 const SizedBox(height: 4),
                 Text(

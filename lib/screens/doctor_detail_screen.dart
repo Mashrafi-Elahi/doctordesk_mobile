@@ -10,6 +10,7 @@ import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
 
@@ -24,6 +25,7 @@ import '../widgets/user_avatar.dart';
 import '../widgets/auth_modal.dart';
 import '../widgets/chamber_accessibility.dart';
 import '../widgets/unclaimed_tag.dart';
+import '../widgets/doctor_claim_dialog.dart';
 
 String _reviewErrorMessage(Object error) {
   final raw = error.toString();
@@ -364,18 +366,27 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                               label: Text(
                                   'Preferred Date: ${selectedDate.day}/${selectedDate.month}/${selectedDate.year}'),
                               onPressed: () async {
-                                bool selectable(DateTime d) =>
-                                    schedule == null || schedule.isVisitingDay(d);
+                                final overrides =
+                                    await SchedulingService.getWindowOverrides(selectedChamberId);
+                                if (!context.mounted) return;
+                                bool selectable(DateTime d) => SchedulingService.isBookableDay(
+                                    d, schedule: schedule, overrides: overrides);
                                 // The picker asserts its initial date is selectable.
-                                var initial = selectedDate;
-                                for (var i = 0; i < 14 && !selectable(initial); i++) {
-                                  initial = initial.add(const Duration(days: 1));
+                                final initial = SchedulingService.firstBookableDay(
+                                        from: selectedDate, schedule: schedule, overrides: overrides) ??
+                                    SchedulingService.firstBookableDay(
+                                        schedule: schedule, overrides: overrides);
+                                if (initial == null) {
+                                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                                    content: Text('This chamber has no open days in the next 15 days.'),
+                                  ));
+                                  return;
                                 }
                                 final picked = await showDatePicker(
                                   context: context,
                                   initialDate: initial,
-                                  firstDate: DateTime.now(),
-                                  lastDate: DateTime.now().add(const Duration(days: 90)),
+                                  firstDate: SchedulingService.today,
+                                  lastDate: SchedulingService.lastBookableDate,
                                   selectableDayPredicate: selectable,
                                 );
                                 if (picked != null) {
@@ -730,7 +741,32 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                         if (!doctor.isClaimedProfile) ...[
                           const SizedBox(height: 4),
                           const UnclaimedTag(),
+                          if (AuthService.currentUser != null && !AuthService.userRoles.isDoctor)
+                            TextButton.icon(
+                              style: TextButton.styleFrom(
+                                padding: EdgeInsets.zero,
+                                visualDensity: VisualDensity.compact,
+                              ),
+                              onPressed: () => showDoctorClaimDialog(context, profileId: doctor.id),
+                              icon: const Icon(Icons.how_to_reg_outlined, size: 16),
+                              label: const Text('Is this you? Claim this profile', style: TextStyle(fontSize: 12)),
+                            ),
                         ],
+                        // The ID a doctor pastes when claiming this profile.
+                        TextButton.icon(
+                          style: TextButton.styleFrom(
+                            padding: EdgeInsets.zero,
+                            visualDensity: VisualDensity.compact,
+                            foregroundColor: Colors.grey.shade700,
+                          ),
+                          onPressed: () async {
+                            final messenger = ScaffoldMessenger.of(context);
+                            await Clipboard.setData(ClipboardData(text: doctor.id));
+                            messenger.showSnackBar(const SnackBar(content: Text('Profile ID copied')));
+                          },
+                          icon: const Icon(Icons.copy, size: 14),
+                          label: const Text('Copy profile ID', style: TextStyle(fontSize: 11.5)),
+                        ),
                         if (doctor.verificationStatus == 'checked_found') ...[
                           const SizedBox(height: 4),
                           Container(

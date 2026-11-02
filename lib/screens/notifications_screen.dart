@@ -78,37 +78,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   Future<void> _openNotification(AppNotification notification) async {
     await NotificationService.markAsRead(notification.id, _userId);
     if (!mounted) return;
-    final type = notification.type;
-    if (type.contains('chat') && notification.relatedId != null && notification.relatedId!.isNotEmpty) {
-      final title = notification.title.replaceAll('New message from ', '');
-      await Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => ChatScreen(
-            chatId: notification.relatedId!,
-            otherUserName: title.isNotEmpty ? title : 'Chat',
-            otherUserUid: '',
-            isDoctor: AuthService.userRoles.isDoctor,
-            isOperator: AuthService.userRoles.isOperator,
-          ),
-        ),
-      );
-    } else if (type.contains('appointment') || type.contains('queue')) {
-      final roles = AuthService.userRoles;
-      await Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => roles.isDoctor || roles.isOperator
-              ? const OperatorDeskScreen()
-              : const AppointmentScreen(),
-        ),
-      );
-    } else if (type.contains('comment') || type.contains('post')) {
-      await Navigator.push(
-        context,
-        MaterialPageRoute(builder: (_) => const FeedScreen()),
-      );
-    }
+    await openNotificationTarget(context, notification);
   }
 
   @override
@@ -262,4 +232,45 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       ),
     );
   }
+}
+
+/// Opens the screen a notification points at, by its `type`. Shared by the
+/// list above and by tapping a heads-up popup. Returns false when the type
+/// has no screen of its own.
+Future<bool> openNotificationTarget(
+    BuildContext context, AppNotification notification) async {
+  final type = notification.type;
+  if (type.contains('chat') && notification.relatedId != null && notification.relatedId!.isNotEmpty) {
+    final title = notification.title.replaceAll('New message from ', '');
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ChatScreen(
+          chatId: notification.relatedId!,
+          otherUserName: title.isNotEmpty ? title : 'Chat',
+          otherUserUid: '',
+          isDoctor: AuthService.userRoles.isDoctor,
+          isOperator: AuthService.userRoles.isOperator,
+        ),
+      ),
+    );
+  } else if (type.contains('appointment') || type.contains('queue')) {
+    final roles = AuthService.userRoles;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => roles.isDoctor || roles.isOperator
+            ? const OperatorDeskScreen()
+            : const AppointmentScreen(),
+      ),
+    );
+  } else if (type.contains('comment') || type.contains('post')) {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const FeedScreen()),
+    );
+  } else {
+    return false;
+  }
+  return true;
 }

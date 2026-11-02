@@ -436,10 +436,6 @@ class _ChamberDeskDetail extends StatelessWidget {
         ? AppointmentQueries.pendingRequestsForDoctor(docId)
         : AppointmentQueries.pendingRequestsForChamber(chamberId, doctorId: doctorId);
 
-    final queueQuery = isDoctorDesk && docId != null
-        ? AppointmentQueries.todayQueueForDoctor(docId)
-        : AppointmentQueries.todayQueueForChamber(chamberId, doctorId: doctorId);
-
     final doneQuery = isDoctorDesk && docId != null
         ? AppointmentQueries.completedForDoctor(docId)
         : AppointmentQueries.completedForChamber(chamberId, doctorId: doctorId);
@@ -461,7 +457,7 @@ class _ChamberDeskDetail extends StatelessWidget {
             indicatorColor: theme.colorScheme.primary,
             tabs: const [
               Tab(text: 'Requests'),
-              Tab(text: "Today's Queue"),
+              Tab(text: 'Queue'),
               Tab(text: 'Done'),
             ],
           ),
@@ -473,10 +469,10 @@ class _ChamberDeskDetail extends StatelessWidget {
                   view: _DeskView.requests,
                   chamberId: chamberId,
                 ),
-                _AppointmentList(
-                  query: queueQuery,
-                  view: _DeskView.queue,
+                _DeskQueueTab(
                   chamberId: chamberId,
+                  doctorId: doctorId,
+                  doctorDeskId: isDoctorDesk ? docId : null,
                 ),
                 _AppointmentList(
                   query: doneQuery,
@@ -828,11 +824,31 @@ class _ChamberScheduleHeader extends StatelessWidget {
                             icon: const Icon(Icons.calendar_today, size: 14),
                             label: const Text('Pick Date'),
                             onPressed: () async {
+                              final chamber = await ChamberResolver.resolveChamberRecord(
+                                chamberId: chamberId,
+                                doctorId: selectedDoctorId,
+                              );
+                              final schedule = SchedulingService.parseVisitingHours(
+                                  chamber?.visitingHoursStructured ?? chamber?.visitingHours);
+                              final overrides = await SchedulingService.getWindowOverrides(chamberId);
+                              if (!dialogCtx.mounted) return;
+                              final initial = SchedulingService.firstBookableDay(
+                                      from: selectedDate, schedule: schedule, overrides: overrides) ??
+                                  SchedulingService.firstBookableDay(
+                                      schedule: schedule, overrides: overrides);
+                              if (initial == null) {
+                                ScaffoldMessenger.of(dialogCtx).showSnackBar(const SnackBar(
+                                  content: Text('No open days in the next 15 days. Open a day from the desk header first.'),
+                                ));
+                                return;
+                              }
                               final picked = await showDatePicker(
                                 context: dialogCtx,
-                                initialDate: selectedDate,
-                                firstDate: DateTime.now(),
-                                lastDate: DateTime.now().add(const Duration(days: 60)),
+                                initialDate: initial,
+                                firstDate: SchedulingService.today,
+                                lastDate: SchedulingService.lastBookableDate,
+                                selectableDayPredicate: (d) => SchedulingService.isBookableDay(
+                                    d, schedule: schedule, overrides: overrides),
                               );
                               if (picked != null) {
                                 setDialogState(() {
@@ -1138,10 +1154,318 @@ class _ChamberScheduleHeader extends StatelessWidget {
   }
 }
 
-enum _DeskView { requests, queue, done }
+enum _DeskView { requests, queue, upcoming, done }
+
+/// Queue tab: a strip of the booking window's days with booking counts.
+/// Today shows the live queue; a later day lists its bookings and lets the
+/// desk open or close that date.
+class _DeskQueueTab extends StatefulWidget {
+  const _DeskQueueTab({
+    required this.chamberId,
+    this.doctorId,
+    this.doctorDeskId,
+  });
+
+  final String chamberId;
+  final String? doctorId;
+
+  /// Set on a doctor's own desk, which spans all of their chambers.
+  final String? doctorDeskId;
+
+  @override
+  State<_DeskQueueTab> createState() => _DeskQueueTabState();
+}
+
+class _DeskQueueTabState extends State<_DeskQueueTab> {
+  DateTime _day = SchedulingService.today;
+  late Stream<QuerySnapshot<Map<String, dynamic>>> _windowStream;
+  late Stream<QuerySnapshot<Map<String, dynamic>>> _overrideStream;
+  late Future<ChamberRecord?> _chamberFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _subscribe();
+  }
+
+  @override
+  void didUpdateWidget(covariant _DeskQueueTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.chamberId != widget.chamberId ||
+        oldWidget.doctorId != widget.doctorId ||
+        oldWidget.doctorDeskId != widget.doctorDeskId) {
+      _subscribe();
+    }
+  }
+
+  void _subscribe() {
+    final from = SchedulingService.today;
+    final deskDoctor = widget.doctorDeskId;
+    _windowStream = AppointmentQueries.activeBetween(
+      chamberId: deskDoctor != null ? null : widget.chamberId,
+      doctorId: deskDoctor ?? widget.doctorId,
+      from: from,
+      to: from.add(const Duration(days: SchedulingService.bookingWindowDays)),
+    ).snapshots();
+    _overrideStream = FirebaseFirestore.instance
+        .collection('chamber_day_overrides')
+        .where(FieldPath.documentId,
+            whereIn: SchedulingService.bookingWindow
+                .map((d) => '${widget.chamberId}_${SchedulingService.dateKey(d)}')
+                .toList())
+        .snapshots();
+    _chamberFuture = ChamberResolver.resolveChamberRecord(
+      chamberId: widget.chamberId,
+      doctorId: widget.doctorId,
+    );
+  }
+
+  Query<Map<String, dynamic>> _dayQuery(DateTime day) {
+    final deskDoctor = widget.doctorDeskId;
+    return deskDoctor != null
+        ? AppointmentQueries.queueForDoctorOnDay(deskDoctor, day)
+        : AppointmentQueries.queueForChamberOnDay(widget.chamberId, day, doctorId: widget.doctorId);
+  }
+
+  Future<void> _setStatus(String status) async {
+    try {
+      await SchedulingService.setDayOverride(
+        chamberId: widget.chamberId,
+        doctorId: widget.doctorId ?? widget.doctorDeskId ?? '',
+        date: _day,
+        status: status,
+        actorUid: AuthService.currentUser?.uid ?? 'system',
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not update ${_dayLabel(_day)}: $e')),
+        );
+      }
+    }
+  }
+
+  static const _weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+  String _dayLabel(DateTime d) {
+    final diff = d.difference(SchedulingService.today).inDays;
+    if (diff == 0) return 'Today';
+    if (diff == 1) return 'Tomorrow';
+    return '${_weekdays[d.weekday - 1]} ${d.day}/${d.month}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isToday = _day == SchedulingService.today;
+    const noDocs = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+
+    return FutureBuilder<ChamberRecord?>(
+      future: _chamberFuture,
+      builder: (context, chamberSnap) {
+        final chamber = chamberSnap.data;
+        final schedule = SchedulingService.parseVisitingHours(
+            chamber?.visitingHoursStructured ?? chamber?.visitingHours);
+        return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          stream: _overrideStream,
+          builder: (context, overrideSnap) {
+            final overrides = <String, Map<String, dynamic>>{
+              for (final doc in overrideSnap.data?.docs ?? noDocs)
+                doc.id.substring(widget.chamberId.length + 1): doc.data(),
+            };
+            return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              stream: _windowStream,
+              builder: (context, windowSnap) {
+                final counts = <String, int>{};
+                for (final doc in windowSnap.data?.docs ?? noDocs) {
+                  final t = doc.data()['scheduledTime'];
+                  if (t is Timestamp) {
+                    final key = SchedulingService.dateKey(t.toDate());
+                    counts[key] = (counts[key] ?? 0) + 1;
+                  }
+                }
+                final dayKey = SchedulingService.dateKey(_day);
+                return Column(
+                  children: [
+                    SizedBox(
+                      height: 80,
+                      child: ListView.separated(
+                        padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+                        scrollDirection: Axis.horizontal,
+                        itemCount: SchedulingService.bookingWindowDays,
+                        separatorBuilder: (_, __) => const SizedBox(width: 6),
+                        itemBuilder: (context, i) {
+                          final d = SchedulingService.bookingWindow[i];
+                          final count = counts[SchedulingService.dateKey(d)] ?? 0;
+                          return _DayChip(
+                            topLabel: i == 0 ? 'Today' : _weekdays[d.weekday - 1],
+                            day: d.day,
+                            count: count,
+                            selected: d == _day,
+                            open: count > 0 ||
+                                SchedulingService.isBookableDay(d,
+                                    schedule: schedule, overrides: overrides),
+                            onTap: () => setState(() => _day = d),
+                          );
+                        },
+                      ),
+                    ),
+                    if (!isToday)
+                      _DayStatusBar(
+                        label: _dayLabel(_day),
+                        status: (overrides[dayKey]?['status'] ?? '').toString().toLowerCase(),
+                        isVisitingDay: schedule?.isVisitingDay(_day) ?? true,
+                        booked: counts[dayKey] ?? 0,
+                        onSetStatus: _setStatus,
+                      ),
+                    Divider(height: 1, color: theme.dividerColor.withValues(alpha: 0.2)),
+                    Expanded(
+                      child: _AppointmentList(
+                        key: ValueKey(dayKey),
+                        query: _dayQuery(_day),
+                        view: isToday ? _DeskView.queue : _DeskView.upcoming,
+                        chamberId: widget.chamberId,
+                      ),
+                    ),
+                  ],
+                );
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+class _DayChip extends StatelessWidget {
+  const _DayChip({
+    required this.topLabel,
+    required this.day,
+    required this.count,
+    required this.selected,
+    required this.open,
+    required this.onTap,
+  });
+
+  final String topLabel;
+  final int day;
+  final int count;
+  final bool selected;
+
+  /// False for days patients can't book (closed, full or not a visiting day).
+  final bool open;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final fg = selected
+        ? scheme.onPrimary
+        : open
+            ? scheme.onSurface
+            : scheme.onSurface.withValues(alpha: 0.38);
+    return Material(
+      color: selected
+          ? scheme.primary
+          : scheme.surfaceContainerHighest.withValues(alpha: open ? 0.6 : 0.25),
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: onTap,
+        child: SizedBox(
+          width: 58,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(topLabel, style: TextStyle(fontSize: 11, color: fg)),
+              Text('$day', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: fg)),
+              Text(
+                count > 0 ? '$count booked' : (open ? '' : 'Off'),
+                style: TextStyle(
+                  fontSize: 9.5,
+                  fontWeight: FontWeight.w600,
+                  color: selected ? scheme.onPrimary : (count > 0 ? scheme.primary : fg),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Status of a later day in the queue tab, with the action that flips it.
+class _DayStatusBar extends StatelessWidget {
+  const _DayStatusBar({
+    required this.label,
+    required this.status,
+    required this.isVisitingDay,
+    required this.booked,
+    required this.onSetStatus,
+  });
+
+  final String label;
+  final String status;
+  final bool isVisitingDay;
+  final int booked;
+  final Future<void> Function(String status) onSetStatus;
+
+  Future<void> _confirmClose(BuildContext context) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Close $label?'),
+        content: Text(booked > 0
+            ? 'Patients can no longer book this day. The $booked existing booking(s) stay, so let those patients know.'
+            : 'Patients can no longer book this day.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Close day')),
+        ],
+      ),
+    );
+    if (ok == true) await onSetStatus('closed');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final String text;
+    final Color color;
+    final Widget action;
+    if (status == 'closed' || status == 'full') {
+      text = status == 'closed' ? '$label: Closed' : '$label: Marked full';
+      color = status == 'closed' ? Colors.red.shade800 : Colors.orange.shade900;
+      action = TextButton(onPressed: () => onSetStatus('open'), child: const Text('Reopen'));
+    } else if (status != 'open' && !isVisitingDay) {
+      text = '$label: Not a visiting day';
+      color = theme.colorScheme.onSurfaceVariant;
+      action = FilledButton.tonal(onPressed: () => onSetStatus('open'), child: const Text('Open this day'));
+    } else {
+      text = '$label: Open for booking';
+      color = Colors.green.shade800;
+      action = TextButton(onPressed: () => _confirmClose(context), child: const Text('Close day'));
+    }
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 8, 4),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(text,
+                style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600, color: color)),
+          ),
+          action,
+        ],
+      ),
+    );
+  }
+}
 
 class _AppointmentList extends StatefulWidget {
   const _AppointmentList({
+    super.key,
     required this.query,
     required this.view,
     required this.chamberId,
@@ -1202,6 +1526,11 @@ class _AppointmentListState extends State<_AppointmentList> {
                 title: 'No patients waiting today',
                 message: 'Accepted requests join this queue in order.',
               ),
+            _DeskView.upcoming => const EmptyStateView(
+                icon: Icons.event_available_outlined,
+                title: 'No bookings on this day yet',
+                message: 'Confirmed appointments for this date appear here.',
+              ),
             _DeskView.done => const EmptyStateView(
                 icon: Icons.task_alt,
                 title: 'No completed visits today',
@@ -1211,7 +1540,7 @@ class _AppointmentListState extends State<_AppointmentList> {
 
         // Today's Queue sorted strictly by queuePosition
         final docs = rawDocs.toList();
-        if (view == _DeskView.queue) {
+        if (view == _DeskView.queue || view == _DeskView.upcoming) {
           docs.sort((a, b) {
             final posA = (a.data()['queuePosition'] as num? ?? 99999).toInt();
             final posB = (b.data()['queuePosition'] as num? ?? 99999).toInt();
@@ -1409,8 +1738,27 @@ class _AppointmentRow extends StatelessWidget {
     // Captured up front: the row leaves the list as soon as its status
     // changes, so its context is gone by the time the write finishes.
     final messenger = ScaffoldMessenger.of(context);
-    final selected = await _pickSlot(context,
-        title: 'Confirm now', confirmLabel: 'Confirm & give token');
+    // The patient's own time is the default: one tap to book it. Without a
+    // chosen time (or if it's taken) the desk picks a free slot.
+    DateTime? selected;
+    final wanted = _preferredTime;
+    if (wanted != null && wanted.isAfter(DateTime.now())) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (c) => AlertDialog(
+          title: const Text('Confirm appointment?'),
+          content: Text('$_patientName · ${_dateOnlyLabel()} at ${_format12Hour(wanted)} (the time they chose).'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Pick another time')),
+            FilledButton(onPressed: () => Navigator.pop(c, true), child: const Text('Confirm')),
+          ],
+        ),
+      );
+      if (ok == null) return;
+      if (ok) selected = wanted;
+    }
+    if (!context.mounted) return;
+    selected ??= await _pickSlot(context, title: 'Confirm', confirmLabel: 'Confirm & give token');
     if (selected == null) return;
     try {
       await DataService.confirmAppointment(
@@ -1432,7 +1780,7 @@ class _AppointmentRow extends StatelessWidget {
     final messenger = ScaffoldMessenger.of(context);
     final doctorId = (data['doctorId'] ?? '').toString();
     final selected = await _pickSlot(context,
-        title: 'Propose a time', confirmLabel: 'Send to patient');
+        title: 'Reschedule (patient must accept)', confirmLabel: 'Send to patient');
     if (selected == null) return;
     try {
       await QueueService.proposeTime(
@@ -1652,10 +2000,30 @@ class _AppointmentRow extends StatelessWidget {
                       'Proposed ${_proposedLabel()} · waiting for patient',
                       style: TextStyle(color: Colors.orange.shade900, fontSize: 12.5, fontWeight: FontWeight.w600),
                     ),
-                  ] else if (_preferredTime != null) ...[
-                    const SizedBox(height: 6),
-                    Text('Prefers ${_format12Hour(_preferredTime!)}',
-                        style: Theme.of(context).textTheme.bodySmall),
+                  ] else ...[
+                    const SizedBox(height: 8),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.5),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.schedule, size: 18),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              _preferredTime != null
+                                  ? 'Patient wants ${_dateOnlyLabel()} at ${_format12Hour(_preferredTime!)}'
+                                  : 'Patient wants ${_dateOnlyLabel()} · any time',
+                              style: const TextStyle(fontWeight: FontWeight.w700),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ],
                   const SizedBox(height: 12),
                   Row(
@@ -1663,15 +2031,15 @@ class _AppointmentRow extends StatelessWidget {
                       if (!isDateClosed) ...[
                         Expanded(
                           child: FilledButton(
-                            onPressed: () => _propose(context),
-                            child: Text(status == ApptStatus.proposed ? 'Change time' : 'Propose time'),
+                            onPressed: () => _accept(context),
+                            child: const Text('Confirm'),
                           ),
                         ),
                         const SizedBox(width: 8),
                         Expanded(
                           child: OutlinedButton(
-                            onPressed: () => _accept(context),
-                            child: const Text('Confirm now'),
+                            onPressed: () => _propose(context),
+                            child: Text(status == ApptStatus.proposed ? 'Change time' : 'Reschedule'),
                           ),
                         ),
                       ],

@@ -1011,3 +1011,58 @@ describe('inline chat photo attachments', () => {
     await assertSucceeds(deleteDoc(doc(patientDb, `${CHAT}/attachments/a2`)));
   });
 });
+
+describe('staff chat, consult chat unlock, inbox hiding', () => {
+  async function seedAppt(status = 'confirmed', userId = 'patient') {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const db = context.firestore();
+      await setDoc(doc(db, 'appointments/appt-c'), requestedAppointment({ status, userId }));
+      await setDoc(doc(db, 'chats/staff_doctor-profile'), {
+        type: 'staff', participants: ['doctor', 'operator'], doctorUid: 'doctor',
+        doctorId: 'doctor-profile', status: 'active', messageCount: 0,
+      });
+    });
+  }
+  const consult = (extra = {}) => ({
+    participants: ['patient', 'doctor'], patientUid: 'patient', doctorUid: 'doctor',
+    doctorId: 'doctor-profile', unlockedBy: 'appt-c', status: 'active',
+    messageLimit: 20, messageCount: 0, unlockChamberId: 'chamber-a', ...extra,
+  });
+
+  it('lets a patient open their consult chat only for their own confirmed visit', async () => {
+    const patientDb = testEnv.authenticatedContext('patient').firestore();
+    await seedAppt('requested');
+    await assertFails(setDoc(doc(patientDb, 'chats/patient_doctor'), consult()));
+    await seedAppt('confirmed');
+    await assertFails(setDoc(doc(patientDb, 'chats/patient_doctor'), consult({ messageLimit: 500 })));
+    await assertFails(setDoc(doc(patientDb, 'chats/patient_doctor'), consult({ participants: ['patient', 'stranger'], doctorUid: 'stranger' })));
+    await assertSucceeds(setDoc(doc(patientDb, 'chats/patient_doctor'), consult()));
+  });
+
+  it('lets a patient post an event about their own appointment, not a stranger', async () => {
+    await seedAppt();
+    const patientDb = testEnv.authenticatedContext('patient').firestore();
+    const strangerDb = testEnv.authenticatedContext('stranger').firestore();
+    const event = (uid) => ({ senderUid: uid, type: 'system', appointmentId: 'appt-c', text: 'New request', createdAt: new Date() });
+    await assertSucceeds(setDoc(doc(patientDb, 'chats/staff_doctor-profile/messages/e1'), event('patient')));
+    await assertSucceeds(updateDoc(doc(patientDb, 'chats/staff_doctor-profile'), { lastMessage: 'New request', lastEventAppointmentId: 'appt-c', updatedAt: new Date() }));
+    await assertFails(setDoc(doc(strangerDb, 'chats/staff_doctor-profile/messages/e2'), event('stranger')));
+    await assertFails(getDoc(doc(patientDb, 'chats/staff_doctor-profile')));
+    await assertFails(updateDoc(doc(patientDb, 'chats/staff_doctor-profile'), { participants: ['doctor', 'operator', 'patient'] }));
+  });
+
+  it('lets staff chat members talk with no limit and only the doctor change members', async () => {
+    await seedAppt();
+    const opDb = testEnv.authenticatedContext('operator').firestore();
+    const doctorDb = testEnv.authenticatedContext('doctor').firestore();
+    await assertSucceeds(setDoc(doc(opDb, 'chats/staff_doctor-profile/messages/m1'), { senderUid: 'operator', text: 'hi', createdAt: new Date() }));
+    await assertFails(updateDoc(doc(opDb, 'chats/staff_doctor-profile'), { participants: ['doctor', 'operator', 'stranger'] }));
+    await assertSucceeds(updateDoc(doc(doctorDb, 'chats/staff_doctor-profile'), { participants: ['doctor'], status: 'closed' }));
+  });
+
+  it('lets users hide chats only in their own inbox', async () => {
+    const patientDb = testEnv.authenticatedContext('patient').firestore();
+    await assertSucceeds(setDoc(doc(patientDb, 'users/patient/inboxHidden/c1'), { hiddenAt: new Date() }));
+    await assertFails(setDoc(doc(patientDb, 'users/doctor/inboxHidden/c1'), { hiddenAt: new Date() }));
+  });
+});

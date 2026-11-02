@@ -2,12 +2,17 @@
 //
 // In-app notifications service managing notifications in Firestore
 // and persisting offline/guest notifications locally via SharedPreferences.
+// While the app is open (or recently backgrounded) it also shows new docs as
+// Android heads-up notifications. True push when the app is closed would need
+// FCM, which needs Cloud Functions (Blaze plan).
 
 import 'dart:async';
 import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class AppNotification {
@@ -81,7 +86,128 @@ class AppNotification {
 
 class NotificationService {
   static const String _prefsKeyPrefix = 'local_notifications_';
+  static const String _permissionAskedKey = 'notification_permission_asked';
+  static const String _channelId = 'doctordesk_alerts';
   static final FirebaseFirestore _db = FirebaseFirestore.instance;
+  static final FlutterLocalNotificationsPlugin _popups =
+      FlutterLocalNotificationsPlugin();
+
+  static void Function(AppNotification)? _onPopupTap;
+  static StreamSubscription<User?>? _authSub;
+  static StreamSubscription<List<AppNotification>>? _popupSub;
+  static String? _popupUid;
+  static DateTime _popupSince = DateTime.now();
+  static final Set<String> _seenIds = {};
+
+  /// Sets up heads-up popups (Android only) and starts following the
+  /// signed-in user's notifications. [onTap] runs when a popup is tapped,
+  /// including one that launched the app from the tray.
+  static Future<void> initPopups({
+    required void Function(AppNotification notification) onTap,
+  }) async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
+    _onPopupTap = onTap;
+    try {
+      await _popups.initialize(
+        settings: const InitializationSettings(
+          android: AndroidInitializationSettings('ic_stat_notify'),
+        ),
+        onDidReceiveNotificationResponse: (response) =>
+            _handlePopupTap(response.payload),
+      );
+      final launch = await _popups.getNotificationAppLaunchDetails();
+      if (launch?.didNotificationLaunchApp == true) {
+        final payload = launch!.notificationResponse?.payload;
+        WidgetsBinding.instance
+            .addPostFrameCallback((_) => _handlePopupTap(payload));
+      }
+      await _authSub?.cancel();
+      _authSub = FirebaseAuth.instance.authStateChanges().listen(_followUser);
+    } catch (e) {
+      debugPrint('Notification popup init error: $e');
+    }
+  }
+
+  static void _handlePopupTap(String? payload) {
+    if (payload == null || payload.isEmpty) return;
+    try {
+      final notification = AppNotification.fromJson(
+          jsonDecode(payload) as Map<String, dynamic>);
+      _onPopupTap?.call(notification);
+    } catch (e) {
+      debugPrint('Notification popup tap error: $e');
+    }
+  }
+
+  static Future<void> _followUser(User? user) async {
+    final uid = user?.uid;
+    if (uid == _popupUid) return;
+    await _popupSub?.cancel();
+    _popupSub = null;
+    _seenIds.clear();
+    _popupUid = uid;
+    if (uid == null) return;
+
+    unawaited(_requestPermissionOnce());
+    // The first snapshot is the backlog: remember it but don't pop it up.
+    // The time check also guards against a cache-first snapshot followed by
+    // older docs arriving from the server.
+    _popupSince = DateTime.now().subtract(const Duration(minutes: 1));
+    var primed = false;
+    _popupSub = notificationsStream(uid).listen((list) {
+      if (!primed) {
+        primed = true;
+        _seenIds.addAll(list.map((n) => n.id));
+        return;
+      }
+      for (final notification in list) {
+        if (!_seenIds.add(notification.id)) continue;
+        if (notification.isRead ||
+            notification.timestamp.isBefore(_popupSince)) {
+          continue;
+        }
+        unawaited(_showPopup(notification));
+      }
+    }, onError: (Object e) => debugPrint('Notification popup stream error: $e'));
+  }
+
+  static Future<void> _requestPermissionOnce() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (prefs.getBool(_permissionAskedKey) == true) return;
+      await prefs.setBool(_permissionAskedKey, true);
+      await _popups
+          .resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin>()
+          ?.requestNotificationsPermission();
+    } catch (e) {
+      debugPrint('Notification permission request error: $e');
+    }
+  }
+
+  static Future<void> _showPopup(AppNotification notification) async {
+    try {
+      await _popups.show(
+        id: notification.id.hashCode & 0x7fffffff,
+        title: notification.title,
+        body: notification.body,
+        notificationDetails: NotificationDetails(
+          android: AndroidNotificationDetails(
+            _channelId,
+            'DoctorDesk alerts',
+            channelDescription:
+                'Appointments, queue updates, messages and replies',
+            importance: Importance.high,
+            priority: Priority.high,
+            styleInformation: BigTextStyleInformation(notification.body),
+          ),
+        ),
+        payload: jsonEncode(notification.toJson()),
+      );
+    } catch (e) {
+      debugPrint('Notification popup error: $e');
+    }
+  }
 
   static String get currentUserId =>
       FirebaseAuth.instance.currentUser?.uid ?? 'guest';

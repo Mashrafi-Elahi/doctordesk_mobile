@@ -66,6 +66,12 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isAiSuggestingSpecialty = false;
   StreamSubscription<User?>? _authSubscription;
 
+  // Held in state so the bell doesn't open a new Firestore listener on
+  // every rebuild; swapped only when the signed-in user changes.
+  String _bellUid = AuthService.currentUser?.uid ?? 'guest';
+  late Stream<List<AppNotification>> _bellStream =
+      NotificationService.notificationsStream(_bellUid);
+
   String get _greetingName {
     final displayName = AuthService.currentUser?.displayName ?? '';
     if (displayName.trim().isEmpty) return '';
@@ -166,7 +172,13 @@ class _HomeScreenState extends State<HomeScreen> {
     _loadData();
     _authSubscription = AuthService.authStateChanges.listen((user) {
       if (mounted) {
-        setState(() {});
+        setState(() {
+          final uid = user?.uid ?? 'guest';
+          if (uid != _bellUid) {
+            _bellUid = uid;
+            _bellStream = NotificationService.notificationsStream(uid);
+          }
+        });
         _loadData();
       }
     });
@@ -299,9 +311,13 @@ class _HomeScreenState extends State<HomeScreen> {
         _todayFeeling = localTodayMood;
       }
 
-      final specialitiesData = await ApiService.fetchSpecialities();
-      final doctorsData = await ApiService.fetchDoctors(limit: 5);
-      final todayStatus = await ApiService.fetchTodayFeeling();
+      // Independent reads: fetch together instead of one after another.
+      final specialitiesFuture = ApiService.fetchSpecialities();
+      final doctorsFuture = ApiService.fetchDoctors(limit: 5);
+      final todayFuture = ApiService.fetchTodayFeeling();
+      final specialitiesData = await specialitiesFuture;
+      final doctorsData = await doctorsFuture;
+      final todayStatus = await todayFuture;
 
       Doctor? ownDoc;
       final ownId = AuthService.userRoles.doctorProfileId;
@@ -464,8 +480,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               ),
                             ),
                             StreamBuilder<List<AppNotification>>(
-                              stream: NotificationService.notificationsStream(
-                                  AuthService.currentUser?.uid ?? 'guest'),
+                              stream: _bellStream,
                               builder: (context, snapshot) {
                                 final unreadCount = snapshot.data
                                         ?.where((n) => !n.isRead)

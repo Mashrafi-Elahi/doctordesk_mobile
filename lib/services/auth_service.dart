@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:google_sign_in/google_sign_in.dart';
@@ -105,6 +106,36 @@ class AuthService {
   }
 
   /// Refreshes and returns the additive roles from database
+  static String _rolesKey(String uid) => 'cached_user_roles_$uid';
+
+  static Future<void> _cacheRoles(String uid, Map<String, dynamic> profile) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_rolesKey(uid), jsonEncode({
+        'roles': profile['roles'],
+        'chamberCount': profile['chamberCount'],
+        'doctorProfileId': profile['doctorProfileId'],
+        'operatorAssignments': profile['operatorAssignments'],
+      }));
+    } catch (_) {}
+  }
+
+  /// Roles from the last successful fetch, so startup needn't wait on the
+  /// network. Returns false when there is nothing cached for this user.
+  static Future<bool> loadCachedRoles() async {
+    final uid = currentUser?.uid;
+    if (uid == null) return false;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_rolesKey(uid));
+      if (raw == null) return false;
+      _currentUserRoles = UserRoles.fromJson(Map<String, dynamic>.from(jsonDecode(raw) as Map));
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   static Future<UserRoles> fetchUserRoles() async {
     final uid = currentUser?.uid;
 
@@ -113,6 +144,7 @@ class AuthService {
         final profile = await ApiService.fetchUserProfile(uid);
         if (profile != null) {
           _currentUserRoles = UserRoles.fromJson(profile);
+          await _cacheRoles(uid, profile);
           return _currentUserRoles;
         }
       }

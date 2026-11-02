@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -52,6 +54,132 @@ class ChatService {
 
   static String generateChatId(String uid1, String uid2) {
     return uid1.compareTo(uid2) < 0 ? '${uid1}_$uid2' : '${uid2}_$uid1';
+  }
+
+  /// Fields that open (or re-open) the one doctor–patient consult chat when an
+  /// appointment is confirmed. Written inside transactions without reading the
+  /// chat first (the desk can't read a chat it isn't in), so the limit grows by
+  /// [extraMessages] per confirmed visit and the counter starts at 0 if new.
+  static Map<String, dynamic> consultChatOnConfirm({
+    required String patientUid,
+    required String doctorUid,
+    required String patientName,
+    required String doctorName,
+    required String doctorId,
+    required String chamberId,
+    required String appointmentId,
+    required DateTime visit,
+    int extraMessages = 20,
+  }) {
+    final when = '${visit.day}/${visit.month}/${visit.year}';
+    return {
+      'participants': [patientUid, doctorUid],
+      'participantRoles': {patientUid: 'Patient', doctorUid: 'Doctor'},
+      'participantNames': {patientUid: patientName, doctorUid: doctorName},
+      'patientUid': patientUid,
+      'doctorUid': doctorUid,
+      'patientName': patientName,
+      'doctorName': doctorName,
+      'doctorId': doctorId,
+      'unlockChamberId': chamberId,
+      'unlockedBy': appointmentId,
+      'status': 'active',
+      'expiresAt': Timestamp.fromDate(visit.add(const Duration(days: 7))),
+      'messageLimit': FieldValue.increment(extraMessages),
+      'messageCount': FieldValue.increment(0),
+      'lastMessage': 'Appointment confirmed for $when. You can message the doctor here.',
+      'updatedAt': FieldValue.serverTimestamp(),
+    };
+  }
+
+  static String staffChatId(String doctorId) => 'staff_$doctorId';
+
+  /// Creates or refreshes the single chat between a doctor and all of their
+  /// desk operators. No message limit and no expiry. Called by the doctor or
+  /// an admin when operators are assigned or removed.
+  static Future<void> syncStaffChat({
+    required String doctorId,
+    required String doctorUid,
+    required String doctorName,
+    required Map<String, String> operators, // uid -> display name
+    String? chamberId,
+  }) async {
+    final ref = _db.collection('chats').doc(staffChatId(doctorId));
+    final uids = operators.keys.where((u) => u.isNotEmpty && u != doctorUid).toList();
+    await ref.set({
+      'type': 'staff',
+      'participants': [doctorUid, ...uids],
+      'participantRoles': {doctorUid: 'Doctor', for (final u in uids) u: 'Chamber desk'},
+      'participantNames': {doctorUid: doctorName, for (final u in uids) u: operators[u] ?? 'Desk'},
+      'doctorUid': doctorUid,
+      'doctorName': doctorName,
+      'doctorId': doctorId,
+      if (chamberId != null) 'chamberId': chamberId,
+      'status': uids.isEmpty ? 'closed' : 'active',
+      'messageCount': FieldValue.increment(0),
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
+  /// Posts an automatic appointment event ("New request…", "Confirmed…") into
+  /// the doctor's staff chat and notifies the doctor and desk. Works from the
+  /// desk (a chat member) and from the patient (rules check the appointment is
+  /// theirs). A doctor without a desk team has no staff chat; they still get
+  /// the notification, pointing at the appointment instead.
+  static Future<void> postAppointmentEvent({
+    required String doctorId,
+    required String appointmentId,
+    required String text,
+  }) async {
+    final actor = FirebaseAuth.instance.currentUser?.uid ?? '';
+    if (doctorId.isEmpty || actor.isEmpty) return;
+    final chatId = staffChatId(doctorId);
+    final chatRef = _db.collection('chats').doc(chatId);
+    var posted = false;
+    try {
+      final batch = _db.batch();
+      batch.set(chatRef.collection('messages').doc(), {
+        'senderUid': actor,
+        'type': 'system',
+        'appointmentId': appointmentId,
+        'text': text,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+      batch.update(chatRef, {
+        'lastMessage': text,
+        'lastEventAppointmentId': appointmentId,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      await batch.commit();
+      posted = true;
+    } catch (e) {
+      debugPrint('[ChatService] no staff chat for $doctorId: $e');
+    }
+
+    // Recipients: the doctor's account and every operator assigned to them.
+    final recipients = <String>{};
+    try {
+      final doc = await _db.collection('doctors').doc(doctorId).get();
+      final uid = (doc.data()?['claimedByUid'] ?? '').toString();
+      if (uid.isNotEmpty) recipients.add(uid);
+      final ops = await _db.collection('chamber_operators').where('doctorId', isEqualTo: doctorId).get();
+      for (final d in ops.docs) {
+        final uid = (d.data()['operatorUid'] ?? '').toString();
+        if (uid.isNotEmpty) recipients.add(uid);
+      }
+    } catch (_) {}
+    recipients.remove(actor);
+    for (final uid in recipients) {
+      try {
+        await NotificationService.createNotification(
+          userId: uid,
+          title: 'Appointment update',
+          body: text,
+          type: posted ? 'chat_message' : 'new_appointment_request',
+          relatedId: posted ? chatId : appointmentId,
+        );
+      } catch (_) {}
+    }
   }
 
   /// Unlocks follow-up chat session for a patient and doctor following care.
@@ -172,6 +300,54 @@ class ChatService {
         .snapshots()
         .map((snap) => snap.docs.map((d) => ChatMessage.fromFirestore(d)).toList());
   }
+
+  /// The user's inbox: their chats minus the ones they deleted for
+  /// themselves (until a newer message arrives) and archived duplicates.
+  static Stream<List<ChatSession>> streamInbox(String uid) {
+    late final StreamController<List<ChatSession>> ctrl;
+    List<ChatSession>? chats;
+    var hidden = <String, DateTime>{};
+    StreamSubscription<List<ChatSession>>? chatSub;
+    StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? hiddenSub;
+    void emit() {
+      if (chats == null || ctrl.isClosed) return;
+      ctrl.add(chats!.where((c) {
+        if (c.status == 'archived') return false;
+        final at = hidden[c.id];
+        return at == null || c.updatedAt.isAfter(at);
+      }).toList());
+    }
+
+    ctrl = StreamController<List<ChatSession>>(
+      onListen: () {
+        chatSub = streamUserChats(uid).listen((v) {
+          chats = v;
+          emit();
+        }, onError: ctrl.addError);
+        hiddenSub = _db.collection('users').doc(uid).collection('inboxHidden').snapshots().listen((snap) {
+          hidden = {
+            for (final d in snap.docs)
+              // A pending serverTimestamp reads as null: treat it as now.
+              d.id: (d.data()['hiddenAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
+          };
+          emit();
+        }, onError: (Object e) => debugPrint('[ChatService] inboxHidden: $e'));
+      },
+      onCancel: () {
+        chatSub?.cancel();
+        hiddenSub?.cancel();
+      },
+    );
+    return ctrl.stream;
+  }
+
+  /// "Delete chat" for this user only; the other side keeps it.
+  static Future<void> hideChatForMe(String uid, String chatId) => _db
+      .collection('users').doc(uid).collection('inboxHidden').doc(chatId)
+      .set({'hiddenAt': FieldValue.serverTimestamp()});
+
+  static Future<void> unhideChatForMe(String uid, String chatId) =>
+      _db.collection('users').doc(uid).collection('inboxHidden').doc(chatId).delete();
 
   static Stream<List<ChatSession>> streamUserChats(String uid) {
     if (uid.isEmpty || FirebaseAuth.instance.currentUser == null) {

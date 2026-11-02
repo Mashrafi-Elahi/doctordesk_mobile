@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import 'chamber_resolver.dart';
+import 'chat_service.dart';
 import 'notification_service.dart';
 import 'queue_service.dart';
 
@@ -267,6 +268,89 @@ class SchedulingService {
     };
   }
 
+  /// Bookings are open for today plus the next 14 days, for patients and
+  /// desks alike.
+  static const int bookingWindowDays = 15;
+
+  static DateTime get today {
+    final now = DateTime.now();
+    return DateTime(now.year, now.month, now.day);
+  }
+
+  static DateTime get lastBookableDate =>
+      today.add(const Duration(days: bookingWindowDays - 1));
+
+  /// The days of the booking window, starting today.
+  static List<DateTime> get bookingWindow => List.generate(
+      bookingWindowDays, (i) => today.add(Duration(days: i)));
+
+  /// Day overrides for every date in the booking window, keyed by [dateKey].
+  static Future<Map<String, Map<String, dynamic>>> getWindowOverrides(
+      String chamberId) async {
+    if (chamberId.isEmpty) return {};
+    try {
+      final ids = bookingWindow.map((d) => '${chamberId}_${dateKey(d)}').toList();
+      final snap = await _db
+          .collection('chamber_day_overrides')
+          .where(FieldPath.documentId, whereIn: ids)
+          .get();
+      return {
+        for (final doc in snap.docs)
+          doc.id.substring(chamberId.length + 1): doc.data(),
+      };
+    } catch (_) {
+      return {};
+    }
+  }
+
+  /// Whether [day] can be booked: inside the window, not closed or full,
+  /// a visiting day (or opened for that date by the desk), and, for today,
+  /// before the chamber closes.
+  static bool isBookableDay(
+    DateTime day, {
+    ParsedSchedule? schedule,
+    Map<String, Map<String, dynamic>> overrides = const {},
+  }) {
+    final d = DateTime(day.year, day.month, day.day);
+    if (d.isBefore(today) || d.isAfter(lastBookableDate)) return false;
+
+    final override = overrides[dateKey(d)];
+    final status = (override?['status'] ?? '').toString().toLowerCase();
+    if (status == 'closed' || status == 'full') return false;
+    if (status != 'open' && schedule != null && !schedule.isVisitingDay(d)) {
+      return false;
+    }
+
+    if (d == today) {
+      var end = schedule?.end;
+      if (override?['endHour'] != null && override?['endMinute'] != null) {
+        end = TimeOfDay(
+          hour: (override!['endHour'] as num).toInt(),
+          minute: (override['endMinute'] as num).toInt(),
+        );
+      }
+      if (end != null &&
+          !DateTime.now().isBefore(DateTime(d.year, d.month, d.day, end.hour, end.minute))) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /// First bookable day on or after [from], or null if the window has none.
+  static DateTime? firstBookableDay({
+    DateTime? from,
+    ParsedSchedule? schedule,
+    Map<String, Map<String, dynamic>> overrides = const {},
+  }) {
+    final start = from ?? today;
+    for (final d in bookingWindow) {
+      if (d.isBefore(DateTime(start.year, start.month, start.day))) continue;
+      if (isBookableDay(d, schedule: schedule, overrides: overrides)) return d;
+    }
+    return null;
+  }
+
   static Future<Map<String, dynamic>?> getDayOverride(String chamberId, DateTime date) async {
     try {
       final docId = '${chamberId}_${dateKey(date)}';
@@ -437,6 +521,7 @@ class SchedulingService {
     String doctorId = '';
     String chamberId = 'chamber';
     int assignedQueue = 1;
+    (DocumentReference<Map<String, dynamic>>, Map<String, dynamic>)? consultChat;
 
     await _db.runTransaction((tx) async {
       final apptSnap = await tx.get(apptRef);
@@ -514,105 +599,33 @@ class SchedulingService {
         'updatedAt': FieldValue.serverTimestamp(),
       });
 
-      // Check if actor is operator
-      final isActorOperator = actorUid.isNotEmpty && actorUid != doctorAuthUid;
-      final operatorUid = isActorOperator ? actorUid : (appt['operatorUid']?.toString() ?? '');
-      final operatorName = isActorOperator ? (appt['operatorName'] ?? 'Clinic Desk Operator').toString() : 'Clinic Desk Operator';
-
-      final chatExpiry = Timestamp.fromDate(slot.add(const Duration(days: 7)));
-      final dateStr = '${slot.day}/${slot.month}/${slot.year}';
-      final timeStr = '${slot.hour > 12 ? slot.hour - 12 : (slot.hour == 0 ? 12 : slot.hour)}:${slot.minute.toString().padLeft(2, '0')} ${slot.hour >= 12 ? 'PM' : 'AM'}';
-
-      // 1. Patient with Doctor conversation
+      // One consult chat per doctor+patient, re-opened for this visit. Desk
+      // staff are never added: doctor and desk talk in the staff chat.
       if (resolvedPatientUid.isNotEmpty && doctorAuthUid.isNotEmpty) {
-        final chatPatientDoctorRef = _db.collection('chats').doc('chat_${appointmentId}_patient_doctor');
-        tx.set(chatPatientDoctorRef, {
-          'participants': [resolvedPatientUid, doctorAuthUid],
-          'participantRoles': {
-            resolvedPatientUid: 'Patient',
-            doctorAuthUid: 'Doctor',
-          },
-          'participantNames': {
-            resolvedPatientUid: resolvedPatientName,
-            doctorAuthUid: resolvedDoctorName,
-          },
-          'patientUid': resolvedPatientUid,
-          'doctorUid': doctorAuthUid,
-          'doctorId': doctorId,
-          'chamberId': chamberId,
-          'appointmentId': appointmentId,
-          'status': 'active',
-          'expiresAt': chatExpiry,
-          'messageLimit': 20,
-          'messageCount': 0,
-          'unlockedBy': actorUid,
-          'lastMessage': 'Appointment confirmed for $dateStr at $timeStr. Doctor consultation unlocked.',
-          'createdAt': FieldValue.serverTimestamp(),
-          'updatedAt': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
-      }
-
-      // 2. Patient with Handling Operator conversation (if operator handled)
-      if (resolvedPatientUid.isNotEmpty && operatorUid.isNotEmpty && operatorUid != doctorAuthUid) {
-        final chatPatientOpRef = _db.collection('chats').doc('chat_${appointmentId}_patient_operator');
-        tx.set(chatPatientOpRef, {
-          'participants': [resolvedPatientUid, operatorUid],
-          'participantRoles': {
-            resolvedPatientUid: 'Patient',
-            operatorUid: 'Clinic Desk Operator',
-          },
-          'participantNames': {
-            resolvedPatientUid: resolvedPatientName,
-            operatorUid: operatorName,
-          },
-          'patientUid': resolvedPatientUid,
-          'doctorUid': doctorAuthUid,
-          'operatorUid': operatorUid,
-          'doctorId': doctorId,
-          'chamberId': chamberId,
-          'appointmentId': appointmentId,
-          'status': 'active',
-          'expiresAt': chatExpiry,
-          'messageLimit': 20,
-          'messageCount': 0,
-          'unlockedBy': actorUid,
-          'lastMessage': 'Appointment confirmed for $dateStr at $timeStr. Clinic desk chat unlocked.',
-          'createdAt': FieldValue.serverTimestamp(),
-          'updatedAt': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
-      }
-
-      // 3. Operator with Doctor conversation (if operator handled)
-      if (operatorUid.isNotEmpty && doctorAuthUid.isNotEmpty && operatorUid != doctorAuthUid) {
-        final chatOpDoctorRef = _db.collection('chats').doc('chat_${appointmentId}_operator_doctor');
-        tx.set(chatOpDoctorRef, {
-          'participants': [operatorUid, doctorAuthUid],
-          'participantRoles': {
-            operatorUid: 'Clinic Desk Operator',
-            doctorAuthUid: 'Doctor',
-          },
-          'participantNames': {
-            operatorUid: operatorName,
-            doctorAuthUid: resolvedDoctorName,
-          },
-          'patientUid': resolvedPatientUid,
-          'doctorUid': doctorAuthUid,
-          'operatorUid': operatorUid,
-          'doctorId': doctorId,
-          'chamberId': chamberId,
-          'appointmentId': appointmentId,
-          'status': 'active',
-          'expiresAt': chatExpiry,
-          'messageLimit': 50,
-          'messageCount': 0,
-          'unlockedBy': actorUid,
-          'lastMessage': 'Queue #$assignedQueue confirmed for $resolvedPatientName ($dateStr at $timeStr).',
-          'createdAt': FieldValue.serverTimestamp(),
-          'updatedAt': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
+        consultChat = (
+          _db.collection('chats').doc(ChatService.generateChatId(resolvedPatientUid, doctorAuthUid)),
+          ChatService.consultChatOnConfirm(
+            patientUid: resolvedPatientUid,
+            doctorUid: doctorAuthUid,
+            patientName: resolvedPatientName,
+            doctorName: resolvedDoctorName,
+            doctorId: doctorId,
+            chamberId: chamberId,
+            appointmentId: appointmentId,
+            visit: slot,
+          ),
+        );
       }
     });
 
+    // Best effort: a refused chat write must never undo the confirmation.
+    if (consultChat != null) {
+      try {
+        await consultChat!.$1.set(consultChat!.$2, SetOptions(merge: true));
+      } catch (e) {
+        debugPrint('Consult chat not opened: $e');
+      }
+    }
     resolvedChamberName = await ChamberResolver.resolveChamberName(
       chamberId: chamberId,
       doctorId: doctorId,
@@ -631,7 +644,21 @@ class SchedulingService {
         );
       } catch (_) {}
     }
+    await ChatService.postAppointmentEvent(
+      doctorId: doctorId,
+      appointmentId: appointmentId,
+      text: '✅ Confirmed: $resolvedPatientName · token #$assignedQueue · ${_eventTime(slot)} · $resolvedChamberName',
+    );
   }
+
+  /// "3 Nov, 5:30 PM" for chat event messages.
+  static String _eventTime(DateTime t) {
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    final h = t.hour > 12 ? t.hour - 12 : (t.hour == 0 ? 12 : t.hour);
+    return '${t.day} ${months[t.month - 1]}, $h:${t.minute.toString().padLeft(2, '0')} ${t.hour >= 12 ? 'PM' : 'AM'}';
+  }
+
+  static String eventTime(DateTime t) => _eventTime(t);
 
   static Future<void> rescheduleAppointment({
     required String appointmentId,
@@ -711,14 +738,6 @@ class SchedulingService {
         'updatedAt': FieldValue.serverTimestamp(),
       });
 
-      final newChatExpiry = Timestamp.fromDate(newSlot.add(const Duration(days: 7)));
-      for (final suffix in ['patient_doctor', 'patient_operator', 'operator_doctor']) {
-        final cRef = _db.collection('chats').doc('chat_${appointmentId}_$suffix');
-        tx.set(cRef, {
-          'expiresAt': newChatExpiry,
-          'updatedAt': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
-      }
     });
 
     if (resolvedPatientUid.isNotEmpty) {

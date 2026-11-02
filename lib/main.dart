@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -12,10 +14,16 @@ import 'theme/app_theme.dart';
 
 import 'package:flutter/rendering.dart';
 import 'services/tts_service.dart';
+import 'services/notification_service.dart';
+import 'screens/notifications_screen.dart';
+
+/// Lets notification popups navigate without a widget context.
+final GlobalKey<NavigatorState> appNavigatorKey = GlobalKey<NavigatorState>();
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await SpecialtyMatcher.load();
+  // Runs alongside Firebase start-up instead of before it.
+  final specialties = SpecialtyMatcher.load();
   try {
     await Firebase.initializeApp(
       options: DefaultFirebaseOptions.currentPlatform,
@@ -25,9 +33,16 @@ void main() async {
   }
 
   await AuthService.loadGuestMode();
-  await AuthService.fetchUserRoles();
+  // Cached roles open the app at once and refresh in the background; only a
+  // first launch waits on the network, and never more than 4 seconds.
+  if (await AuthService.loadCachedRoles()) {
+    unawaited(AuthService.fetchUserRoles());
+  } else {
+    await AuthService.fetchUserRoles()
+        .timeout(const Duration(seconds: 4), onTimeout: () => AuthService.userRoles);
+  }
   await AppLanguage.load();
-  await TtsService.instance.init();
+  await specialties;
 
   final prefs = await SharedPreferences.getInstance();
   final bool hasSeenOnboarding = prefs.getBool('hasSeenOnboarding') ?? false;
@@ -38,6 +53,25 @@ void main() async {
     hasSeenOnboarding: hasSeenOnboarding,
     initialRole: initialRole,
   ));
+  // Not needed for the first frame.
+  unawaited(TtsService.instance.init());
+  unawaited(NotificationService.initPopups(onTap: _openNotificationPopup));
+}
+
+Future<void> _openNotificationPopup(AppNotification notification) async {
+  // Don't wait on Firestore here: offline, the update only completes once it
+  // reaches the server, and the tap should navigate straight away.
+  unawaited(
+      NotificationService.markAsRead(notification.id, notification.userId));
+  final context = appNavigatorKey.currentContext;
+  if (context == null || !context.mounted) return;
+  final opened = await openNotificationTarget(context, notification);
+  if (!opened && context.mounted) {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const NotificationsScreen()),
+    );
+  }
 }
 
 class TtsNavigationObserver extends NavigatorObserver {
@@ -77,6 +111,7 @@ class MyApp extends StatelessWidget {
   Widget _buildApp(ThemeData theme) {
     return MaterialApp(
       title: 'DocDesk',
+      navigatorKey: appNavigatorKey,
       debugShowCheckedModeBanner: false,
       theme: theme,
       locale: Locale(AppLanguage.code.value),

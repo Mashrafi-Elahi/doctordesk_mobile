@@ -4,4 +4,4 @@
 3. Requests may not reach the desk operator: verify operatorAssignments contains the chamberId and check the handledBy routing in createAppointment.
 4. Booking success message should read: 'Request sent. You will be notified once it is confirmed with a date and time.'
 5. Only 13 rules tests exist; no tests for queue writes, chat creation, notifications.
-See PROGRESS.md, CHANGES.md, REVIEW.md and git log for history.
+See git log for history.

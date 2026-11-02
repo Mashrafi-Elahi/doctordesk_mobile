@@ -26,6 +26,27 @@ class AppointmentScreen extends StatefulWidget {
 
 const _pastStatuses = {'done', 'completed'};
 
+/// The calendar day an upcoming appointment is for: the proposed time while
+/// a proposal is pending, otherwise the scheduled (or preferred) time.
+DateTime? _visitDay(Map<String, dynamic> data) {
+  final status = QueueService.normalizeStatus(data['status'] ?? 'waiting');
+  final ts = status == ApptStatus.proposed ? data['proposedTime'] : data['scheduledTime'];
+  if (ts is! Timestamp) return null;
+  final d = ts.toDate();
+  return DateTime(d.year, d.month, d.day);
+}
+
+String _dayHeader(DateTime? day) {
+  if (day == null) return 'Date not set';
+  final now = DateTime.now();
+  final diff = day.difference(DateTime(now.year, now.month, now.day)).inDays;
+  if (diff == 0) return 'Today';
+  if (diff == 1) return 'Tomorrow';
+  if (diff < 0) return 'Earlier · ${day.day}/${day.month}/${day.year}';
+  const weekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+  return '${weekdays[day.weekday - 1]}, ${day.day}/${day.month}/${day.year}';
+}
+
 class _AppointmentScreenState extends State<AppointmentScreen> {
   @override
   Widget build(BuildContext context) {
@@ -126,7 +147,13 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
                     // 'done' is the terminal status the desk sets; 'completed' is legacy.
                     return !_pastStatuses.contains(status) &&
                         !ApptStatus.terminal.contains(status);
-                  }).toList();
+                  }).toList()
+                    ..sort((a, b) {
+                      final da = _visitDay(a.data());
+                      final db = _visitDay(b.data());
+                      if (da == null || db == null) return da == null ? 1 : -1;
+                      return da.compareTo(db);
+                    });
 
                   final past = docs.where((d) {
                     final status =
@@ -176,7 +203,10 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
                                   }
                                 }
 
-                                return Card(
+                                final day = _visitDay(data);
+                                final prevDay = i == 0 ? null : _visitDay(upcoming[i - 1].data());
+                                final showHeader = i == 0 || day != prevDay;
+                                final card = Card(
                                   margin: const EdgeInsets.only(bottom: 12),
                                   shape: RoundedRectangleBorder(
                                       borderRadius: BorderRadius.circular(16)),
@@ -349,6 +379,23 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
                                       ],
                                     ),
                                   ),
+                                );
+                                if (!showHeader) return card;
+                                return Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Padding(
+                                      padding: EdgeInsets.fromLTRB(4, i == 0 ? 0 : 8, 4, 8),
+                                      child: Text(
+                                        _dayHeader(day),
+                                        style: theme.textTheme.titleSmall?.copyWith(
+                                          fontWeight: FontWeight.w700,
+                                          color: theme.colorScheme.primary,
+                                        ),
+                                      ),
+                                    ),
+                                    card,
+                                  ],
                                 );
                               },
                             ),

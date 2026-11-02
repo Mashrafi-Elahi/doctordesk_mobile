@@ -45,12 +45,27 @@ class _NearbyDoctorsScreenState extends State<NearbyDoctorsScreen> {
   double? _lat;
   double? _lng;
   bool _accessibleOnly = false;
+  // GPS options are only offered when they can work; see DeviceLocation.available.
+  bool _gpsAvailable = false;
 
   @override
   void initState() {
     super.initState();
     _loadSavedArea();
     unawaited(_prepareLocationSearch());
+    unawaited(_refreshGpsAvailability());
+  }
+
+  Future<void> _refreshGpsAvailability() async {
+    final available = await DeviceLocation.available();
+    if (mounted && available != _gpsAvailable) {
+      setState(() => _gpsAvailable = available);
+    }
+  }
+
+  Future<void> _useDeviceLocation() async {
+    await _requestLocationAndSearch();
+    await _refreshGpsAvailability();
   }
 
   Future<void> _prepareLocationSearch() async {
@@ -381,6 +396,9 @@ class _NearbyDoctorsScreenState extends State<NearbyDoctorsScreen> {
   }
 
   Future<void> _showLocationPicker() async {
+    // Location may have been switched off since the screen opened.
+    await _refreshGpsAvailability();
+    if (!mounted) return;
     await showModalBottomSheet<void>(
       context: context,
       builder: (context) => SafeArea(
@@ -388,16 +406,18 @@ class _NearbyDoctorsScreenState extends State<NearbyDoctorsScreen> {
           shrinkWrap: true,
           children: [
             const ListTile(title: Text('Change location', style: TextStyle(fontWeight: FontWeight.w700))),
-            ListTile(
-              leading: const Icon(Icons.my_location_outlined),
-              title: const Text('Use device location'),
-              subtitle: const Text('Doctors within 6 km of you'),
-              onTap: () async {
-                Navigator.pop(context);
-                await _requestLocationAndSearch();
-              },
-            ),
-            const Divider(height: 1),
+            if (_gpsAvailable) ...[
+              ListTile(
+                leading: const Icon(Icons.my_location_outlined),
+                title: const Text('Use device location'),
+                subtitle: const Text('Doctors within 6 km of you'),
+                onTap: () async {
+                  Navigator.pop(context);
+                  await _useDeviceLocation();
+                },
+              ),
+              const Divider(height: 1),
+            ],
             ...availableDoctorLocations.map(
               (location) => ListTile(
                 leading: const Icon(Icons.location_on_outlined),
@@ -525,12 +545,14 @@ class _NearbyDoctorsScreenState extends State<NearbyDoctorsScreen> {
                       );
                     }).toList(),
                   ),
-                  const SizedBox(height: 8),
-                  OutlinedButton.icon(
-                    onPressed: _isLoading ? null : _requestLocationAndSearch,
-                    icon: const Icon(Icons.my_location, size: 18),
-                    label: const Text('Use device location'),
-                  ),
+                  if (_gpsAvailable) ...[
+                    const SizedBox(height: 8),
+                    OutlinedButton.icon(
+                      onPressed: _isLoading ? null : _useDeviceLocation,
+                      icon: const Icon(Icons.my_location, size: 18),
+                      label: const Text('Use device location'),
+                    ),
+                  ],
                   // Suggestions
                   if (_suggestions.isNotEmpty)
                     Container(
@@ -592,10 +614,15 @@ class _NearbyDoctorsScreenState extends State<NearbyDoctorsScreen> {
                                   style:
                                       TextStyle(color: Colors.grey[600])),
                               const SizedBox(height: 16),
-                              FilledButton.tonal(
-                                onPressed: _requestLocationAndSearch,
-                                child: const Text('Try Again'),
-                              ),
+                              _gpsAvailable
+                                  ? FilledButton.tonal(
+                                      onPressed: _useDeviceLocation,
+                                      child: const Text('Try Again'),
+                                    )
+                                  : FilledButton.tonal(
+                                      onPressed: _showLocationPicker,
+                                      child: const Text('Pick your area'),
+                                    ),
                             ],
                           ),
                         ),

@@ -296,6 +296,9 @@ class Doctor {
       verifiedAt: json['verifiedAt'],
       verifiedBy: json['verifiedBy']?.toString(),
       isClaimed: claimed,
+      // Hidden/merged duplicates and soft-deleted profiles must not list.
+      isHidden: json['hidden'] == true || json['isHidden'] == true,
+      isDeleted: json['isDeleted'] == true,
       claimedByUid: json['claimedByUid']?.toString(),
       claimStatus: cStatus,
       certificateImageUrl: json['certificateImageUrl'],

@@ -10,7 +10,7 @@ DoctorDesk runs on Firebase Spark: Firestore and Auth only. Cloud Storage
 is not available on this project and scheduled Cloud Functions need Blaze,
 so the client and admin scripts must do everything.
 
-A read-only audit (`node scripts/audit_firestore.js`, 2 Nov 2026) of the
+A read-only audit (`scripts/audit_firestore.js`, since removed; see git history at 53a51d3) on 2 Nov 2026 of the
 live database found:
 
 | Collection | Docs | Problem |
@@ -125,7 +125,7 @@ swapping the `data` field for a `url` without changing the chat UI.
 2. [x] Claim field sync for single-owner profiles (`scripts/migrate_cleanup.js --apply`).
 3. [x] Stop writing dotted role keys (`scripts/setup_accounts.js`).
 4. [x] Remove review image upload (Storage unavailable).
-5. [ ] Owner runs `node scripts/migrate_cleanup.js --apply --prune` to delete
+5. [ ] Owner runs `node scripts/migrate_cleanup.js --apply --prune` (restore it with `git show 53a51d3:scripts/migrate_cleanup.js`) to delete
        literal `roles.*` keys and past legacy queue docs.
 6. [ ] Merge the duplicate Nuzhat Saima profiles (admin decision: keep
        `doctor_uHlqUgF07vZ8Ie4z54KinN9i0Li1`, hide `doctor_nuzhat_saima`).

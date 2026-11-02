@@ -80,11 +80,11 @@ flowchart LR
 1. **Search Token Prefixing (`DoctorSearchIndex.queryPrefixes`):**
    Instead of downloading the entire database to filter locally, doctors have precomputed `searchPrefixes` (2–16 characters) stored as an indexed array in Firestore. Search queries use Firestore's `arrayContainsAny: prefixes` with a strict `limit(20)`. This retrieves **only 10–20 documents** instead of 6,000.
 2. **Cursor-Based Pagination (`startAfterDocument`):**
-   In [`firestore_service.dart`](file:///c:/Users/user/Downloads/docdesk/doctordesk-flutter/lib/services/firestore_service.dart), we replaced offset queries with document cursor snapshots. Each page loads exactly 20 records (`limit: 20`), ensuring predictable, minimal consumption.
+   In [`firestore_service.dart`](../lib/services/firestore_service.dart), we replaced offset queries with document cursor snapshots. Each page loads exactly 20 records (`limit: 20`), ensuring predictable, minimal consumption.
 3. **24-Hour Cache Time-To-Live (TTL):**
-   In [`specialty_matcher.dart`](file:///c:/Users/user/Downloads/docdesk/doctordesk-flutter/lib/services/specialty_matcher.dart), remote rules are cached in device `SharedPreferences`. The app checks `cached_specialty_rules_fetched_at`; if the cache is under 24 hours old, Firestore is **never queried**.
+   In [`specialty_matcher.dart`](../lib/services/specialty_matcher.dart), remote rules are cached in device `SharedPreferences`. The app checks `cached_specialty_rules_fetched_at`; if the cache is under 24 hours old, Firestore is **never queried**.
 4. **Geohash Spatial Bounding Ranges:**
-   Rather than fetching all doctors and computing distances on the client, [`geofire_utils.dart`](file:///c:/Users/user/Downloads/docdesk/doctordesk-flutter/lib/services/geofire_utils.dart) generates lexicographical `[start, end]` string pairs based on geohashes. Firestore only queries chambers inside those specific bounding boxes.
+   Rather than fetching all doctors and computing distances on the client, [`geofire_utils.dart`](../lib/services/geofire_utils.dart) generates lexicographical `[start, end]` string pairs based on geohashes. Firestore only queries chambers inside those specific bounding boxes.
 5. **Pre-Bundled 6,000+ Listed Doctors in APK (`assets/data/bundled_doctors.json`):**
    All 6,048 merged doctor records (with multi-specialty and multi-chamber consolidation) are bundled directly inside the APK asset bundle and indexed in memory via `DoctorSearchIndex`, guaranteeing **0 Firestore reads** for directory browsing, specialty filtering (including ENT), symptom search, and Haversine nearby lookup.
 
@@ -94,7 +94,7 @@ flowchart LR
 
 ### A. The Haversine Geodesic Distance Formula
 
-When a user searches for nearby doctors or chambers (e.g., Mirpur Cantonment, BUP Medical), distance is calculated on the Earth's spherical surface using the **Haversine formula** implemented in [`geofire_utils.dart`](file:///c:/Users/user/Downloads/docdesk/doctordesk-flutter/lib/services/geofire_utils.dart#L163-L174):
+When a user searches for nearby doctors or chambers (e.g., Mirpur Cantonment, BUP Medical), distance is calculated on the Earth's spherical surface using the **Haversine formula** implemented in [`geofire_utils.dart`](../lib/services/geofire_utils.dart#L163-L174):
 
 $$\Delta\phi = \phi_2 - \phi_1 = \text{radians}(\text{lat}_2 - \text{lat}_1)$$
 $$\Delta\lambda = \lambda_2 - \lambda_1 = \text{radians}(\text{lon}_2 - \text{lon}_1)$$
@@ -128,7 +128,7 @@ Because Cloud Firestore does not have native geospatial indexing, DoctorDesk use
 
 ### C. Bidirectional Symptom-Specialty Search Index (v2)
 
-[`doctor_search_index.dart`](file:///c:/Users/user/Downloads/docdesk/doctordesk-flutter/lib/services/doctor_search_index.dart) was upgraded to a **bidirectional symptom↔specialty index**, enabling patients to find doctors by describing their problem rather than knowing a specialty name.
+[`doctor_search_index.dart`](../lib/services/doctor_search_index.dart) was upgraded to a **bidirectional symptom↔specialty index**, enabling patients to find doctors by describing their problem rather than knowing a specialty name.
 
 ```mermaid
 flowchart LR
@@ -197,13 +197,13 @@ flowchart TD
 ```
 
 ### Where in the Code:
-1. **Rule Engine:** [`lib/services/specialty_matcher.dart`](file:///c:/Users/user/Downloads/docdesk/doctordesk-flutter/lib/services/specialty_matcher.dart)
+1. **Rule Engine:** [`lib/services/specialty_matcher.dart`](../lib/services/specialty_matcher.dart)
    - Contains clinical rules across 30+ specialties covering **English**, **Bangla script** (e.g., `বুকের ব্যথা`, `মাথা ঘোরা`), and **Banglish** (e.g., `buke chap`, `matha ghurache`, `bomi lage`).
    - Uses **longest-key sorting first** (`sortedKeys.sort((a,b) => b.length.compareTo(a.length))`) to ensure specific terms match before generic terms (e.g., `"chest pain"` matches Cardiology before `"pain"` matches Physical Medicine).
-2. **Generative AI Fallback:** [`lib/services/gemini_service.dart`](file:///c:/Users/user/Downloads/docdesk/doctordesk-flutter/lib/services/gemini_service.dart)
+2. **Generative AI Fallback:** [`lib/services/gemini_service.dart`](../lib/services/gemini_service.dart)
    - Evaluates descriptive queries using **Gemini 2.5 Flash** (updated from deprecated 1.5/2.0 models) with strict medical triage system prompts.
    - Model fallback chain: `gemini-2.5-flash` → `gemini-2.5-flash-lite` → `gemini-2.0-flash-lite`.
-3. **Auto-routing in Search Bar:** [`lib/screens/home_screen.dart`](file:///c:/Users/user/Downloads/docdesk/doctordesk-flutter/lib/screens/home_screen.dart)
+3. **Auto-routing in Search Bar:** [`lib/screens/home_screen.dart`](../lib/screens/home_screen.dart)
    - Typing symptoms directly into the main search bar automatically triggers rule matching and AI triage inline, surfacing a clickable card right below the input field.
 
 ---
@@ -213,8 +213,8 @@ flowchart TD
 DoctorDesk incorporates comprehensive accessibility standards directly into its data models and interface:
 
 ### A. Disability-Friendly Chamber Architecture
-- **Data Model:** Added `isAccessible` (`bool`, default `false`) and `accessibilityFeatures` (`List<String>`) to [`Chamber`](file:///c:/Users/user/Downloads/docdesk/doctordesk-flutter/lib/models/doctor.dart#L3-L24).
-- **Chamber Management:** In [`DoctorManagerScreen`](file:///c:/Users/user/Downloads/docdesk/doctordesk-flutter/lib/screens/doctor_manager_screen.dart), doctors toggle *"Disability-friendly chamber"* and select declared features:
+- **Data Model:** Added `isAccessible` (`bool`, default `false`) and `accessibilityFeatures` (`List<String>`) to [`Chamber`](../lib/models/doctor.dart#L3-L24).
+- **Chamber Management:** In [`DoctorManagerScreen`](../lib/screens/doctor_manager_screen.dart), doctors toggle *"Disability-friendly chamber"* and select declared features:
   - `Ramp` (Wheelchair ramp access)
   - `Lift/Elevator` (Vertical access to upper floors)
   - `Accessible washroom` (Wheelchair-accessible restroom)
@@ -227,12 +227,12 @@ DoctorDesk incorporates comprehensive accessibility standards directly into its 
   - On **Lists** (Specialties & Nearby): Adds an `"Accessible only"` filter chip.
 
 ### B. Global Read Aloud Text-to-Speech (TTS)
-- **Centralized Service:** [`TtsService`](file:///c:/Users/user/Downloads/docdesk/doctordesk-flutter/lib/services/tts_service.dart) singleton backed by `flutter_tts` and persistent `SharedPreferences`.
-- **Root Gesture Interception:** In [`lib/main.dart`](file:///c:/Users/user/Downloads/docdesk/doctordesk-flutter/lib/main.dart), `_ReadAloudGestureWrapper` inspects pointer events:
+- **Centralized Service:** [`TtsService`](../lib/services/tts_service.dart) singleton backed by `flutter_tts` and persistent `SharedPreferences`.
+- **Root Gesture Interception:** In [`lib/main.dart`](../lib/main.dart), `_ReadAloudGestureWrapper` inspects pointer events:
   - **Single Tap:** Speaks the tapped element's semantic label or paragraph text without blocking normal user interaction.
   - **Double Tap:** Executes the widget's underlying navigation or action (*"Tap any item to hear it. Double-tap to open"*).
 - **Locale Synchronization:** TTS language dynamically switches between `en-US` and `bn-BD` matching the app language setting.
-- **Role-Specific Placement:** The shared [`ReadAloudSettingTile`](file:///c:/Users/user/Downloads/docdesk/doctordesk-flutter/lib/widgets/read_aloud_setting_tile.dart) is placed inside an `"ACCESSIBILITY"` section placed directly above `"PREFERENCES"` in:
+- **Role-Specific Placement:** The shared [`ReadAloudSettingTile`](../lib/widgets/read_aloud_setting_tile.dart) is placed inside an `"ACCESSIBILITY"` section placed directly above `"PREFERENCES"` in:
   - Patient: `"Settings"`
   - Doctor: `"Practice Settings"`
   - Operator: `"Chamber Desk Settings"`
@@ -241,7 +241,7 @@ DoctorDesk incorporates comprehensive accessibility standards directly into its 
 
 ## 6. Unified UI Design Token System
 
-To eliminate hardcoded styling, DoctorDesk establishes centralized design tokens in [`lib/theme/app_constants.dart`](file:///c:/Users/user/Downloads/docdesk/doctordesk-flutter/lib/theme/app_constants.dart) and [`lib/theme/app_theme.dart`](file:///c:/Users/user/Downloads/docdesk/doctordesk-flutter/lib/theme/app_theme.dart):
+To eliminate hardcoded styling, DoctorDesk establishes centralized design tokens in [`lib/theme/app_constants.dart`](../lib/theme/app_constants.dart) and [`lib/theme/app_theme.dart`](../lib/theme/app_theme.dart):
 
 ```mermaid
 classDiagram
@@ -284,7 +284,7 @@ classDiagram
 - **Hero Card:** 24px radius container with gradient from `primaryTint` to `primaryLight`, equal-width outlined stat chips (no invented numbers), and distinct booking button.
 - **Floating Pill Bottom Navigation:** Housed in `Scaffold.bottomNavigationBar`, margin 12 from edges and bottom, 24px radius, `primaryTint` background, soft drop shadow, labels always visible.
 - **Scroll View Clearance:** Explicit bottom padding (80–96px) and `SafeArea` wrapping ensure bottom content (e.g., `"ABOUT DOCTORDESK"`, Log Out button) is never hidden behind the floating nav pill or Android system bar.
-- **Google Vector Logo:** Clean 4-color Google vector paths implemented in [`GoogleLogoWidget`](file:///c:/Users/user/Downloads/docdesk/doctordesk-flutter/lib/widgets/google_sign_in_button.dart) using a lightweight custom canvas painter.
+- **Google Vector Logo:** Clean 4-color Google vector paths implemented in [`GoogleLogoWidget`](../lib/widgets/google_sign_in_button.dart) using a lightweight custom canvas painter.
 
 ---
 
@@ -292,16 +292,16 @@ classDiagram
 
 | Member | Primary Focus Area | Key Files & Responsibilities | Core Technical Defense Points |
 | :--- | :--- | :--- | :--- |
-| **Member 1** | **Clinical Triage Engine, Multilingual AI & Global Read Aloud** | [`specialty_matcher.dart`](file:///c:/Users/user/Downloads/docdesk/doctordesk-flutter/lib/services/specialty_matcher.dart)<br>[`gemini_service.dart`](file:///c:/Users/user/Downloads/docdesk/doctordesk-flutter/lib/services/gemini_service.dart)<br>[`tts_service.dart`](file:///c:/Users/user/Downloads/docdesk/doctordesk-flutter/lib/services/tts_service.dart)<br>[`read_aloud_setting_tile.dart`](file:///c:/Users/user/Downloads/docdesk/doctordesk-flutter/lib/widgets/read_aloud_setting_tile.dart) | • Rule-based substring matching across 30+ domains.<br>• Banglish phonetic stem detection (`batha`, `jwor`, `buke chap`).<br>• Longest-match-first sorting to prevent false positives.<br>• Gemini 2.5 Flash generative AI fallback (updated from deprecated 1.5/2.0 models).<br>• Singleton TTS engine with dual locale sync (`en-US`, `bn-BD`) and root gesture hit-testing. |
-| **Member 2** | **Search Indexing, Symptom→Specialty Engine & Geospatial Algorithms** | [`doctor_search_index.dart`](file:///c:/Users/user/Downloads/docdesk/doctordesk-flutter/lib/services/doctor_search_index.dart)<br>[`geofire_utils.dart`](file:///c:/Users/user/Downloads/docdesk/doctordesk-flutter/lib/services/geofire_utils.dart)<br>[`nearby_doctors_screen.dart`](file:///c:/Users/user/Downloads/docdesk/doctordesk-flutter/lib/screens/nearby_doctors_screen.dart)<br>[`doctors_screen.dart`](file:///c:/Users/user/Downloads/docdesk/doctordesk-flutter/lib/screens/doctors_screen.dart) | • Haversine formula calculation for geodesic distance ($R = 6371\text{ km}$).<br>• Geohash bounding box query generation.<br>• **Bidirectional symptom→specialty index** (v2): 100+ symptom phrases injected into searchPrefixes at index time.<br>• Multi-specialty doctors get symptoms for ALL their specialties indexed together.<br>• Multi-token search prefix arrays (`searchPrefixes`) capped at 30 (Firestore 2024 limit) mitigating 50k reads.<br>• Alias and medical abbreviation dictionary with multi-hop expansion chains.<br>• `"Accessible only"` filtering using `doctor.hasAccessibleChamber`. |
-| **Member 3** | **Chamber Queue Operations & Disability-Friendly Chambers** | [`doctor_manager_screen.dart`](file:///c:/Users/user/Downloads/docdesk/doctordesk-flutter/lib/screens/doctor_manager_screen.dart)<br>[`operator_desk_screen.dart`](file:///c:/Users/user/Downloads/docdesk/doctordesk-flutter/lib/screens/operator_desk_screen.dart)<br>[`chamber_accessibility.dart`](file:///c:/Users/user/Downloads/docdesk/doctordesk-flutter/lib/widgets/chamber_accessibility.dart)<br>[`models/doctor.dart`](file:///c:/Users/user/Downloads/docdesk/doctordesk-flutter/lib/models/doctor.dart) | • Dual-role chamber management (doctor manages, operator runs desk).<br>• Chamber accessibility model (`isAccessible`, `accessibilityFeatures`).<br>• Add/Edit chamber dialog with disability feature chips.<br>• Reorderable live patient queues with ticket state updates.<br>• Firestore queue transactions (`waiting` $\rightarrow$ `in_progress` $\rightarrow$ `done`). |
-| **Member 4** | **Patient Portal, Document Vault & Design Token System** | [`theme/app_theme.dart`](file:///c:/Users/user/Downloads/docdesk/doctordesk-flutter/lib/theme/app_theme.dart)<br>[`theme/app_constants.dart`](file:///c:/Users/user/Downloads/docdesk/doctordesk-flutter/lib/theme/app_constants.dart)<br>[`document_service.dart`](file:///c:/Users/user/Downloads/docdesk/doctordesk-flutter/lib/services/document_service.dart)<br>[`health_documents_widget.dart`](file:///c:/Users/user/Downloads/docdesk/doctordesk-flutter/lib/widgets/health_documents_widget.dart)<br>[`profile_screen.dart`](file:///c:/Users/user/Downloads/docdesk/doctordesk-flutter/lib/screens/profile_screen.dart) | • Centralized Design Token system (Deep Indigo palette, Poppins, radii).<br>• Floating pill bottom navigation bar with safe clearance.<br>• Client-side local document storage with on-demand cloud share.<br>• Patient privacy protection (zero reads/writes until user shares).<br>• BMDC & NID verification security gate for doctors. |
+| **Member 1** | **Clinical Triage Engine, Multilingual AI & Global Read Aloud** | [`specialty_matcher.dart`](../lib/services/specialty_matcher.dart)<br>[`gemini_service.dart`](../lib/services/gemini_service.dart)<br>[`tts_service.dart`](../lib/services/tts_service.dart)<br>[`read_aloud_setting_tile.dart`](../lib/widgets/read_aloud_setting_tile.dart) | • Rule-based substring matching across 30+ domains.<br>• Banglish phonetic stem detection (`batha`, `jwor`, `buke chap`).<br>• Longest-match-first sorting to prevent false positives.<br>• Gemini 2.5 Flash generative AI fallback (updated from deprecated 1.5/2.0 models).<br>• Singleton TTS engine with dual locale sync (`en-US`, `bn-BD`) and root gesture hit-testing. |
+| **Member 2** | **Search Indexing, Symptom→Specialty Engine & Geospatial Algorithms** | [`doctor_search_index.dart`](../lib/services/doctor_search_index.dart)<br>[`geofire_utils.dart`](../lib/services/geofire_utils.dart)<br>[`nearby_doctors_screen.dart`](../lib/screens/nearby_doctors_screen.dart)<br>[`doctors_screen.dart`](../lib/screens/doctors_screen.dart) | • Haversine formula calculation for geodesic distance ($R = 6371\text{ km}$).<br>• Geohash bounding box query generation.<br>• **Bidirectional symptom→specialty index** (v2): 100+ symptom phrases injected into searchPrefixes at index time.<br>• Multi-specialty doctors get symptoms for ALL their specialties indexed together.<br>• Multi-token search prefix arrays (`searchPrefixes`) capped at 30 (Firestore 2024 limit) mitigating 50k reads.<br>• Alias and medical abbreviation dictionary with multi-hop expansion chains.<br>• `"Accessible only"` filtering using `doctor.hasAccessibleChamber`. |
+| **Member 3** | **Chamber Queue Operations & Disability-Friendly Chambers** | [`doctor_manager_screen.dart`](../lib/screens/doctor_manager_screen.dart)<br>[`operator_desk_screen.dart`](../lib/screens/operator_desk_screen.dart)<br>[`chamber_accessibility.dart`](../lib/widgets/chamber_accessibility.dart)<br>[`models/doctor.dart`](../lib/models/doctor.dart) | • Dual-role chamber management (doctor manages, operator runs desk).<br>• Chamber accessibility model (`isAccessible`, `accessibilityFeatures`).<br>• Add/Edit chamber dialog with disability feature chips.<br>• Reorderable live patient queues with ticket state updates.<br>• Firestore queue transactions (`waiting` $\rightarrow$ `in_progress` $\rightarrow$ `done`). |
+| **Member 4** | **Patient Portal, Document Vault & Design Token System** | [`theme/app_theme.dart`](../lib/theme/app_theme.dart)<br>[`theme/app_constants.dart`](../lib/theme/app_constants.dart)<br>[`document_service.dart`](../lib/services/document_service.dart)<br>[`health_documents_widget.dart`](../lib/widgets/health_documents_widget.dart)<br>[`profile_screen.dart`](../lib/screens/profile_screen.dart) | • Centralized Design Token system (Deep Indigo palette, Poppins, radii).<br>• Floating pill bottom navigation bar with safe clearance.<br>• Client-side local document storage with on-demand cloud share.<br>• Patient privacy protection (zero reads/writes until user shares).<br>• BMDC & NID verification security gate for doctors. |
 
 ---
 
 ## 8. Testing Credentials & Seeded Cloud Profiles
 
-The database script [`scripts/seed_demo_accounts_and_reviews.js`](file:///c:/Users/user/Downloads/docdesk/doctordesk-flutter/scripts/seed_demo_accounts_and_reviews.js) provisions live accounts and dynamic reviews:
+The one-off script `scripts/seed_demo_accounts_and_reviews.js` (removed after it ran; see git history) provisioned these live accounts and dynamic reviews:
 
 ### A. Dummy Patient Accounts (with dynamic Firestore reviews)
 | Email | Password | Role | Description |
@@ -338,7 +338,7 @@ The database script [`scripts/seed_demo_accounts_and_reviews.js`](file:///c:/Use
 > **Answer:** Cloud Firestore is a document store without native GIS functions like PostGIS or MongoDB `$nearSphere`. Firestore queries can only filter on 1-dimensional ranges. We use **Geohashes** to query bounding boxes on Firestore, which limits document reads to a tight geographical area. Once those candidate documents are retrieved, the client computes the exact spherical geodesic distance using the Haversine formula ($R = 6371.0\text{ km}$), providing sub-meter precision with zero extra database costs.
 
 ### Q3: Why doesn't the Floating Bottom Navigation Bar overlap scrollable content?
-> **Answer:** Standard bottom navigation bars consume scaffold space automatically. Floating navigation bars with custom margins float *above* the body canvas. To guarantee full visibility, every scrollable screen ([`HomeScreen`](file:///c:/Users/user/Downloads/docdesk/doctordesk-flutter/lib/screens/home_screen.dart), [`FeedScreen`](file:///c:/Users/user/Downloads/docdesk/doctordesk-flutter/lib/screens/feed_screen.dart), [`AppointmentScreen`](file:///c:/Users/user/Downloads/docdesk/doctordesk-flutter/lib/screens/appointment_screen.dart), [`ProfileScreen`](file:///c:/Users/user/Downloads/docdesk/doctordesk-flutter/lib/screens/profile_screen.dart), [`SettingsScreen`](file:///c:/Users/user/Downloads/docdesk/doctordesk-flutter/lib/screens/settings_screen.dart)) uses explicit bottom padding (80–96px) and wraps scroll contents inside `SafeArea`. This ensures the lowest items scroll comfortably above the navigation pill and the device gesture navigation bar.
+> **Answer:** Standard bottom navigation bars consume scaffold space automatically. Floating navigation bars with custom margins float *above* the body canvas. To guarantee full visibility, every scrollable screen ([`HomeScreen`](../lib/screens/home_screen.dart), [`FeedScreen`](../lib/screens/feed_screen.dart), [`AppointmentScreen`](../lib/screens/appointment_screen.dart), [`ProfileScreen`](../lib/screens/profile_screen.dart), [`SettingsScreen`](../lib/screens/settings_screen.dart)) uses explicit bottom padding (80–96px) and wraps scroll contents inside `SafeArea`. This ensures the lowest items scroll comfortably above the navigation pill and the device gesture navigation bar.
 
 ### Q4: How does Read Aloud work across arbitrary Flutter widgets without breaking gestures?
 > **Answer:** Rather than manually wrapping hundreds of widgets in tap listeners, we implemented `_ReadAloudGestureWrapper` at the `MaterialApp` root builder. It intercepts pointer down events via `Listener(behavior: HitTestBehavior.translucent)`. When `TtsService.isReadAloudEnabled` is true, a single tap runs `hitTestInView` to extract paragraph text or semantic labels and speaks them through `flutter_tts`. A double tap (detected within a 350ms window and 40px radius) passes through to trigger the widget's default interactive action.

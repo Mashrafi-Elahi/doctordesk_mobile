@@ -6,6 +6,9 @@ class ChatMessage {
   final String text;
   final DateTime createdAt;
   final Map<String, dynamic>? attachment;
+  /// 'system' for automatic appointment events posted into a staff chat.
+  final String type;
+  final String? appointmentId;
 
   ChatMessage({
     required this.id,
@@ -13,7 +16,11 @@ class ChatMessage {
     required this.text,
     required this.createdAt,
     this.attachment,
+    this.type = 'text',
+    this.appointmentId,
   });
+
+  bool get isSystem => type == 'system';
 
   bool get hasAttachment => attachment != null;
   bool get isRevoked => attachment?['isRevoked'] == true;
@@ -42,6 +49,8 @@ class ChatMessage {
       text: (data['text'] ?? '').toString(),
       createdAt: ts is Timestamp ? ts.toDate() : DateTime.now(),
       attachment: data['attachment'] is Map ? Map<String, dynamic>.from(data['attachment'] as Map) : null,
+      type: (data['type'] ?? 'text').toString(),
+      appointmentId: data['appointmentId']?.toString(),
     );
   }
 
@@ -73,6 +82,9 @@ class ChatSession {
   final int messageLimit;
   final int messageCount;
   final String? unlockedBy;
+  /// 'staff' = the one chat between a doctor and their desk operators
+  /// (no message limit, no expiry); anything else is a consult chat.
+  final String type;
 
   ChatSession({
     required this.id,
@@ -94,13 +106,18 @@ class ChatSession {
     this.messageLimit = 20,
     this.messageCount = 0,
     this.unlockedBy,
+    this.type = 'consult',
   });
 
-  bool get isExpired => expiresAt != null && DateTime.now().isAfter(expiresAt!);
-  bool get isLimitReached => messageCount >= messageLimit;
+  bool get isStaff => type == 'staff';
+  bool get isExpired => !isStaff && expiresAt != null && DateTime.now().isAfter(expiresAt!);
+  bool get isLimitReached => !isStaff && messageCount >= messageLimit;
   bool get canSendMessage => status == 'active' && !isExpired && !isLimitReached;
 
   String otherParticipantName(String myUid) {
+    if (isStaff) {
+      return myUid == doctorUid ? 'Desk team · $doctorName' : doctorName;
+    }
     final others = participants.where((p) => p != myUid).toList();
     if (others.isNotEmpty) {
       final otherUid = others.first;
@@ -113,6 +130,7 @@ class ChatSession {
   }
 
   String otherParticipantRole(String myUid) {
+    if (isStaff) return myUid == doctorUid ? 'Chamber desk' : 'Doctor';
     final others = participants.where((p) => p != myUid).toList();
     if (others.isNotEmpty) {
       final otherUid = others.first;
@@ -178,6 +196,7 @@ class ChatSession {
       messageLimit: (data['messageLimit'] as num?)?.toInt() ?? 20,
       messageCount: (data['messageCount'] as num?)?.toInt() ?? 0,
       unlockedBy: data['unlockedBy'] as String?,
+      type: (data['type'] ?? 'consult').toString(),
     );
   }
 }

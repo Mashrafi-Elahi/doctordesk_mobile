@@ -24,7 +24,7 @@ DocDesk addresses this reality through a **Dynamic Constrained-Window Timed-Slot
 - **FR2 (Exclusive Triage Authority)**: The designated chamber desk operator (or the doctor directly if no operator is assigned to the chamber) possesses exclusive authority to `Accept`, `Reschedule`, or `Reject` (with a mandatory clinical/administrative reason) pending requests.
 - **FR3 (Constrained Free-Slot Generation)**: The system dynamically computes the discrete set of valid free consultation slots for a target date using the chamber's weekly schedule, effective slot length, and any active daily overrides. Only system-enumerated free slots may be selected during acceptance or rescheduling.
 - **FR4 (Cross-Chamber Global Invariant)**: A doctor cannot be scheduled for two concurrent active/confirmed consultations at any time, across any combination of chambers.
-- **FR5 (Deterministic Sequential Queue Allocation)**: Upon appointment confirmation, the system assigns a monotonically increasing, non-reusable queue number specific to the chamber and consultation date.
+- **FR5 (Deterministic Sequential Queue Allocation)**: Upon appointment confirmation, the system assigns a monotonically increasing, non-reusable token specific to the doctor, chamber and consultation date (`queues/{chamberId}_{doctorId}_{yyyyMMdd}`, see 3.3).
 - **FR6 (Dynamic Daily Overrides)**: A doctor or authorized chamber operator can dynamically adjust a consultation date's start and end times, declare the day `closed`, mark it `full`, or `reopen` it.
 - **FR7 (Automatic Saturation)**: Daily capacity is strictly derived from the consultation window duration and slot length. When confirmed appointments reach capacity ($N$), the date is marked as saturated (`full`), preventing subsequent reservations.
 - **FR8 (Bi-directional Patient Notification)**: Patients receive automated in-app notifications for every state transition, explicitly indicating old and new consultation times on rescheduling and reasons on rejection.
@@ -33,7 +33,7 @@ DocDesk addresses this reality through a **Dynamic Constrained-Window Timed-Slot
 ### 2.2 Non-Functional Requirements (NFR)
 
 - **NFR1 (Consistency & Atomicity)**: Slot reservation and queue assignment must execute in a single atomic database transaction ($ACID$). Concurrent confirmation attempts on the same doctor time slot must guarantee that exactly one transaction succeeds while conflicting transactions abort cleanly.
-- **NFR2 (Security & Principle of Least Privilege)**: Patients are strictly forbidden from modifying time slots, queue counters, daily overrides, or transitioning appointments to confirmed statuses. Security rules in `firestore.rules` enforce these constraints independently of UI controls.
+- **NFR2 (Security & Principle of Least Privilege)**: Patients cannot modify time slots or daily overrides. Their only queue writes are taking a token when they accept a proposed time and giving it up when they cancel. Security rules in `firestore.rules` enforce these constraints independently of UI controls.
 - **NFR3 (Algorithmic Performance)**: 
   - Slot collision validation and reservation operate in $O(1)$ time via deterministic document IDs (`doctor_slots/{doctorId}_{yyyyMMdd}_{HHmm}`).
   - Free slot generation operates in $O(S)$ time, where $S \le 96$ is the total slots in a daily window ($S \le 16\text{ hours} \times 6\text{ slots/hr}$). No unbounded collection scans are performed.
@@ -79,166 +79,170 @@ Given effective window $E(c, \text{date}) = [T_s, T_e]$ and effective slot lengt
 
 ---
 
-### 3.3 Atomic Reservation Algorithm
+### 3.3 Per-Doctor Daily Queue
+
+Implemented in `lib/services/queue_service.dart` (`QueueService`), with slot
+generation and acceptance in `lib/services/scheduling_service.dart`.
+
+There is one queue document per doctor, per chamber, per day:
 
 ```
-Algorithm 1: Atomic Appointment Confirmation and Slot Reservation
-Input: appointmentId, selectedSlot, actorUid
-Output: Success or Error
-
-1:  dateKey ← FormatDate(selectedSlot, "yyyyMMdd", Asia/Dhaka)
-2:  timeKey ← FormatTime(selectedSlot, "HHmm", Asia/Dhaka)
-3:  slotDocId ← doctorId + "_" + dateKey + "_" + timeKey
-4:
-5:  execute in Firestore.runTransaction(tx):
-6:      apptSnap ← tx.get(appointments.doc(appointmentId))
-7:      if not apptSnap.exists then
-8:          abort("Appointment document does not exist.")
-9:      end if
-10:     doctorId ← apptSnap.data.doctorId
-11:     chamberId ← apptSnap.data.chamberId
-12:
-13:     // Read all required resources before performing mutations
-14:     slotRef ← doctor_slots.doc(slotDocId)
-15:     slotSnap ← tx.get(slotRef)
-16:     queueRef ← queues.doc(chamberId + "_" + dateKey)
-17:     queueSnap ← tx.get(queueRef)
-18:     overrideRef ← chamber_day_overrides.doc(chamberId + "_" + dateKey)
-19:     overrideSnap ← tx.get(overrideRef)
-20:
-21:     // Invariant checks
-22:     if overrideSnap.exists and overrideSnap.data.status in ["closed", "full"] then
-23:         abort("Target date is closed or fully booked.")
-24:     end if
-25:     if slotSnap.exists and slotSnap.data.appointmentId ≠ appointmentId then
-26:         abort("Slot collision: selected slot is already reserved.")
-27:     end if
-28:
-29:     // Queue calculation
-30:     lastPos ← queueSnap.exists ? queueSnap.data.lastQueuePosition : 0
-31:     nextQueue ← (apptSnap.data.queuePosition ≠ null) ? apptSnap.data.queuePosition : (lastPos + 1)
-32:
-33:     // Release old slot lock if rescheduling
-34:     oldSlotId ← apptSnap.data.slotId
-35:     if oldSlotId ≠ null and oldSlotId ≠ slotDocId then
-36:         tx.delete(doctor_slots.doc(oldSlotId))
-37:     end if
-38:
-39:     // Atomic writes
-40:     tx.set(slotRef, {
-41:         doctorId: doctorId,
-42:         chamberId: chamberId,
-43:         appointmentId: appointmentId,
-44:         date: dateKey,
-45:         startTime: Timestamp(selectedSlot)
-46:     })
-47:     tx.update(appointments.doc(appointmentId), {
-48:         status: "confirmed",
-49:         scheduledTime: Timestamp(selectedSlot),
-50:         queuePosition: nextQueue,
-51:         slotId: slotDocId,
-52:         updatedBy: actorUid,
-53:         updatedAt: serverTimestamp()
-54:     })
-55:     if apptSnap.data.queuePosition = null then
-56:         tx.set(queueRef, {
-57:             chamberId: chamberId,
-58:             date: dateKey,
-59:             lastQueuePosition: nextQueue,
-60:             updatedAt: serverTimestamp()
-61:         }, merge: true)
-62:     end if
+queues/{chamberId}_{doctorId}_{yyyyMMdd}
 ```
 
----
+`firestore.rules` rejects a queue write whose ID does not equal
+`chamberId + "_" + doctorId + "_" + date` from its own fields, so two doctors
+sharing a chamber never share token numbers.
 
-### 3.4 System Invariants
+| Field | Meaning |
+| :--- | :--- |
+| `chamberId`, `doctorId`, `date` | Owner of the queue; `date` is `yyyyMMdd` |
+| `lastNumber` | Last token handed out. Only ever grows, so tokens are never reused |
+| `currentServing` | Token now in consultation (0 when idle) |
+| `currentAppointmentId` | Appointment now in consultation (empty when idle) |
+| `waitingTokens` | Tokens still waiting, ascending |
+| `waitingCount` | Length of `waitingTokens` |
+| `lastTouchedAppointmentId`, `updatedAt` | Audit of the last write |
 
-- **Invariant $I_1$ (Strict Doctor Slot Exclusivity)**:
-  $$\forall s_1, s_2 \in \text{doctor\_slots}, \quad s_1.\text{id} = s_2.\text{id} \implies s_1.\text{appointmentId} = s_2.\text{appointmentId}$$
-  A doctor cannot have more than one confirmed consultation in any discrete time slot regardless of chamber location.
-- **Invariant $I_2$ (Capacity Bound)**:
-  $$\sum_{\text{appt} \in \text{Confirmed}(c, \text{date})} 1 \le N(c, \text{date})$$
-  The total number of confirmed appointments cannot exceed derived capacity.
-- **Invariant $I_3$ (Monotonic Queue Numbering)**:
-  For any chamber $c$ on date $d$, queue numbers are monotonically increasing positive integers:
-  $$Q_{k+1} = Q_k + 1, \quad Q_1 = 1$$
-  Once assigned to a patient, queue numbers are never reassigned or reused on the same date.
-- **Invariant $I_4$ (Single Active Booking per Patient-Doctor-Date)**:
-  $$\text{count}(\text{active\_bookings}, \langle \text{patient}, \text{doctor}, \text{chamber}, \text{date} \rangle) \le 1$$
-  Duplicate pending or confirmed requests from the same patient to the same doctor on the same date are rejected.
+The queue holds token numbers only. Any signed-in user may read it, so a
+patient can compute "people ahead" (waiting tokens lower than their own)
+without being able to read anyone else's appointment.
 
----
+Older builds wrote `lastQueuePosition` under a chamber-only ID
+(`queues/{chamberId}_{yyyyMMdd}`). `nextToken()` takes the larger of
+`lastNumber` and `lastQueuePosition`, so numbers never repeat after the switch.
 
-### 3.5 Comparative Analysis: FCFS vs. Fixed Slots vs. Dynamic Window Slots
+**Token assignment** (`assignToken`, run inside the confirming transaction):
 
-| Dimension | Pure FCFS Walk-in | Static Fixed-Slot | DocDesk Dynamic Window Slots |
+```
+newQueue <- queues/{chamberId}_{doctorId}_{dateKey(slot)}
+if the appointment already holds a token in newQueue:
+    token <- that token                      // rescheduled within the same day
+else:
+    token <- max(lastNumber, lastQueuePosition) + 1
+    if the appointment held a token in another day's queue:
+        remove it from that queue's waitingTokens
+add token to newQueue.waitingTokens; lastNumber <- max(lastNumber, token)
+appointment.queuePosition <- token; appointment.queueId <- newQueue.id
+```
+
+Joining and leaving use `joinWrite()` and `leaveWrite()`. Leaving (called in,
+cancelled, no-show) removes the token from `waitingTokens`; when nothing is
+waiting and nobody is in consultation, `currentServing` resets to 0 while
+`lastNumber` is kept.
+
+### 3.4 Appointment Lifecycle
+
+Statuses are defined in `ApptStatus`. `QueueService.transitions` mirrors
+`allowedNext()` in `firestore.rules`, and every service method checks
+`canTransition()` inside its transaction before writing.
+
+| From | Allowed next |
+| :--- | :--- |
+| `requested` | `proposed`, `confirmed`, `rejected`, `cancelled` |
+| `proposed` | `proposed`, `confirmed`, `declined`, `rejected`, `cancelled` |
+| `confirmed` | `confirmed` (reschedule), `checked_in`, `in_consultation`, `no_show`, `cancelled` |
+| `checked_in` | `in_consultation`, `no_show`, `cancelled` |
+| `in_consultation` | `done`, `cancelled` |
+
+Terminal: `done`, `no_show`, `cancelled`, `declined`, `rejected`. Legacy
+values are read through `normalizeStatus()`: `in_progress` becomes
+`in_consultation`, `completed` becomes `done`.
+
+| Step | Who | Method | Effect |
 | :--- | :--- | :--- | :--- |
-| **Arrival Predictability** | Zero: all patients arrive at opening | High on paper, brittle in practice | High: patient assigned a specific slot & queue |
-| **Doctor Arrival Delay Tolerance** | High: queue simply starts late | Low: entire schedule collapses | **High**: doctor/operator shifts window; system notifies |
-| **Waiting Room Crowding** | Severe (20–40 patients at once) | Low until delay occurs | **Minimal**: paced arrivals per $L$-minute intervals |
-| **Cross-Chamber Protection** | None (manual coordinator calling) | Vulnerable to cross-database conflicts | **Atomic $O(1)$ lock** via `doctor_slots` |
-| **Queue Position Retention** | Lost if patient steps away | None (time slot only) | **Persistent**: both queue number and slot time retained |
+| Request | Patient | `FirestoreService` booking | `requested`; an `active_bookings` lock stops duplicate requests for the same doctor, chamber and day |
+| Accept | Desk (operator, or the doctor if no operator) | `SchedulingService.acceptAppointment` | `requested -> confirmed`; reserves `doctor_slots/{doctorId}_{yyyyMMdd}_{HHmm}` and assigns a token |
+| Propose a time | Desk | `QueueService.proposeTime` | `-> proposed`; reserves the slot so it can't be offered twice; no token yet |
+| Answer proposal | Patient | `QueueService.respondToProposal` | accept: `-> confirmed` and takes a token; decline: `-> declined` and frees the slot |
+| Reschedule | Desk | `SchedulingService.rescheduleAppointment` | stays `confirmed`; moves the slot and, if the day changes, the token to the new day's queue |
+| Check in | Desk | `QueueService.checkIn` | `confirmed -> checked_in` (patient has arrived) |
+| Call in | Desk | `QueueService.startConsultation` | `-> in_consultation`; sets `currentServing`, removes the token from `waitingTokens`, sets `autoAdvanceAt` to now + the doctor's `avgConsultMinutes` (default 10), then sends "You're next" once to the lowest waiting token (`nextNotifiedAt`) |
+| Finish | Desk | `QueueService.finishVisit(outcome)` | `in_consultation -> done`, or `confirmed`/`checked_in -> no_show`/`cancelled`; releases the token or clears `currentAppointmentId` |
+| Cancel | Patient | `QueueService.cancelByPatient` | only from `requested`, `proposed`, `confirmed`; gives up the token |
 
----
-
-## 4. State Transition & Process Workflows
-
-### 4.1 Appointment Lifecycle State Machine
+Only one patient per queue can be `in_consultation`: `startConsultation`
+refuses while `currentAppointmentId` points at an appointment still in
+consultation. `autoAdvanceAt` only turns the desk's consult timer red; a visit
+is never ended automatically.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> requested : Patient submits preferred date
-    requested --> confirmed : Operator/Doctor confirms slot & queue
-    requested --> rejected : Operator/Doctor rejects (with reason)
-    requested --> cancelled : Patient cancels request
-
-    confirmed --> confirmed : Operator/Doctor reschedules slot
-    confirmed --> in_progress : Desk operator checks patient in
-    confirmed --> cancelled : Patient cancels (releases slot)
-    confirmed --> rejected : Desk cancels/rejects (releases slot)
-
-    in_progress --> done : Doctor completes consultation
+    [*] --> requested : Patient requests a date
+    requested --> confirmed : Desk accepts a slot (token issued)
+    requested --> proposed : Desk proposes a time
+    proposed --> proposed : Desk proposes another time
+    proposed --> confirmed : Patient accepts (token issued)
+    proposed --> declined : Patient declines (slot freed)
+    requested --> rejected : Desk rejects
+    proposed --> rejected : Desk rejects
+    confirmed --> confirmed : Desk reschedules
+    confirmed --> checked_in : Patient arrives
+    confirmed --> in_consultation : Desk calls in
+    checked_in --> in_consultation : Desk calls in
+    in_consultation --> done : Desk finishes visit
+    confirmed --> no_show
+    checked_in --> no_show
+    requested --> cancelled
+    proposed --> cancelled
+    confirmed --> cancelled
+    checked_in --> cancelled
+    in_consultation --> cancelled
     done --> [*]
+    no_show --> [*]
     cancelled --> [*]
+    declined --> [*]
     rejected --> [*]
 ```
 
-### 4.2 Sequence Diagram: Atomic Appointment Acceptance
+### 3.5 System Invariants
+
+- **$I_1$ Doctor slot exclusivity**: `doctor_slots/{doctorId}_{yyyyMMdd}_{HHmm}`
+  holds at most one `appointmentId`, so a doctor cannot be booked twice in the
+  same slot across chambers.
+- **$I_2$ Capacity bound**: confirmed appointments for a chamber day never
+  exceed $N$, because only enumerated free slots can be chosen.
+- **$I_3$ Monotonic tokens**: within `queues/{chamberId}_{doctorId}_{date}`,
+  `lastNumber` only increases and a token is never handed out twice. The rules
+  require a newly assigned `queuePosition` to equal the queue's new `lastNumber`.
+- **$I_4$ Single active booking**: at most one `active_bookings` lock per
+  patient, doctor, chamber and date.
+- **$I_5$ One in consultation**: at most one appointment per queue is
+  `in_consultation`.
+
+### 3.6 Comparative Analysis
+
+| Dimension | Pure FCFS Walk-in | Static Fixed-Slot | DocDesk |
+| :--- | :--- | :--- | :--- |
+| **Arrival predictability** | None | High on paper, brittle in practice | Slot time plus token number |
+| **Doctor delay tolerance** | High | Low | High: desk shifts the window or proposes a new time |
+| **Waiting room crowding** | Severe | Low until a delay | Low: paced arrivals and live "people ahead" |
+| **Cross-chamber protection** | None | Vulnerable | Atomic `doctor_slots` lock |
+| **Queue position retention** | Lost if patient steps away | None | Token kept until called, cancelled or no-show |
+
+---
+
+## 4. Sequence: Desk Accepts a Request
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor Operator as Desk Operator
-    participant UI as Operator Desk UI
-    participant Service as SchedulingService
-    participant Firestore as Cloud Firestore
-    participant Notif as NotificationService
-    actor Patient as Patient
+    actor Desk as Operator / Doctor
+    participant S as SchedulingService / QueueService
+    participant FS as Cloud Firestore
+    actor Patient
 
-    Operator->>UI: Selects pending request and clicks "Accept"
-    UI->>Service: getFreeSlots(chamberId, doctorId, date)
-    Service->>Firestore: Read chamber schedule & day override
-    Service->>Firestore: Query doctor_slots where doctorId == D and date == dateKey
-    Service-->>UI: Return available free slot list F
-    Operator->>UI: Chooses time slot (e.g., 5:20 PM)
-    UI->>Service: acceptAppointment(apptId, slot, operatorUid)
-
+    Desk->>S: getFreeSlots(chamberId, doctorId, date)
+    S->>FS: chamber hours, day override, doctor_slots for the day
+    S-->>Desk: free slots F
+    Desk->>S: acceptAppointment(apptId, slot)
     rect rgb(240, 248, 255)
-        Note over Service,Firestore: Atomic Transaction Execution
-        Service->>Firestore: tx.get(appointment doc)
-        Service->>Firestore: tx.get(doctor_slots doc)
-        Service->>Firestore: tx.get(queues doc)
-        Service->>Firestore: tx.get(chamber_day_overrides doc)
-        Note over Service: Verify slot available & day open
-        Service->>Firestore: tx.set(doctor_slots/{doctorId}_{date}_{time})
-        Service->>Firestore: tx.update(appointments/{apptId}, confirmed, queue#)
-        Service->>Firestore: tx.set(queues/{chamberId}_{date}, lastQueuePosition)
+        Note over S,FS: one transaction
+        S->>FS: get appointment, slot, override, queue
+        Note over S: check transition, slot free, day open
+        S->>FS: set doctor_slots/{doctorId}_{date}_{time}
+        S->>FS: assignToken into queues/{chamberId}_{doctorId}_{date}
+        S->>FS: update appointment (confirmed, queuePosition, queueId, slotId)
     end
-
-    Firestore-->>Service: Transaction Committed Successfully
-    Service->>Notif: createNotification(patientUid, "Appointment Confirmed", details)
-    Notif->>Patient: In-App Notification (Date, Time, Queue #)
-    Service-->>UI: Success confirmation
-    UI-->>Operator: Display updated queue list
+    S->>Patient: notification (date, time, token)
 ```
