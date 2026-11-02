@@ -2,6 +2,7 @@ import '../services/scheduling_service.dart';
 import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import '../services/chamber_resolver.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/user_role.dart';
@@ -82,6 +83,16 @@ class _DoctorManagerScreenState extends State<DoctorManagerScreen> {
           _doctorName = (data['name'] as String?) ?? user.displayName ?? 'Doctor Specialist';
           final rawChambers = (data['chambers'] as List?) ?? [];
           final fetched = rawChambers.map((c) => Map<String, dynamic>.from(c as Map)).toList();
+          // The chamber doc owns hours and fee; the copy on the doctor may be
+          // stale or missing them (which showed a 5–9 PM default).
+          for (final c in fetched) {
+            final id = (c['id'] ?? '').toString();
+            if (id.isEmpty) continue;
+            final rec = await ChamberResolver.resolveChamberRecord(chamberId: id, doctorId: docId);
+            if (rec == null) continue;
+            if ((rec.visitingHours ?? '').isNotEmpty) c['visitingHours'] = rec.visitingHours;
+            if (rec.name.isNotEmpty) c['hospitalName'] = rec.name;
+          }
           _chambers = fetched;
           await prefs.setString(cacheKey, jsonEncode(_chambers));
         }

@@ -15,9 +15,10 @@ class AppointmentQueries {
         .collection('appointments')
         .where('chamberId', isEqualTo: chamberId)
         .where('doctorId', isEqualTo: doctorId)
-        .where('handledBy', isEqualTo: 'operator')
-        .where('status', whereIn: const ['requested', 'proposed'])
-        .orderBy('createdAt', descending: false);
+        // Doctor and desk both see every request for the doctor; no
+        // handledBy split (it hid desk-routed requests from the doctor).
+        // Ordered on the client (oldest first) to avoid another index.
+        .where('status', whereIn: const ['requested', 'proposed']);
   }
 
   /// Pending requests for an operator: chamberId in assigned chambers + handledBy == 'operator' + status == 'requested'.
@@ -57,9 +58,7 @@ class AppointmentQueries {
     return _db
         .collection('appointments')
         .where('doctorId', isEqualTo: doctorProfileId)
-        .where('handledBy', isEqualTo: 'doctor')
-        .where('status', whereIn: const ['requested', 'proposed'])
-        .orderBy('createdAt', descending: false);
+        .where('status', whereIn: const ['requested', 'proposed']);
   }
 
   /// Active appointments scheduled in [from, to), filtered by chamber and/or
@@ -171,7 +170,7 @@ class AppointmentQueries {
   static Stream<int> pendingRequestCountForDoctor(String doctorProfileId) {
     if (doctorProfileId.isEmpty) return Stream.value(0);
     // The list also shows 'proposed' (waiting on the patient); the badge
-    // counts only requests that need the doctor.
+    // counts only requests that need the doctor or desk.
     return pendingRequestsForDoctor(doctorProfileId)
         .snapshots()
         .map((s) => s.docs.where((d) => d.data()['status'] == 'requested').length);

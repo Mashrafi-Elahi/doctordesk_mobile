@@ -9,6 +9,7 @@ import '../services/auth_service.dart';
 import '../services/chamber_resolver.dart';
 import '../services/data_service.dart';
 import '../services/firestore_service.dart';
+import '../services/notification_service.dart';
 import '../services/queue_service.dart';
 import '../services/scheduling_service.dart';
 import '../widgets/state_views.dart';
@@ -90,6 +91,8 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
             .get();
         final docChambers = <String>[];
         for (final doc in chSnap.docs) {
+          // Removed/merged chambers keep their doctorIds; don't list them.
+          if (doc.data()['status'] == 'removed' || doc.data()['hidden'] == true) continue;
           docChambers.add(doc.id);
           final d = doc.data();
           final name = (d['name'] ?? d['chamberName'] ?? d['hospitalName'] ?? '').toString().trim();
@@ -161,7 +164,12 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
           final chName = (d['chamberName'] ?? '').toString().trim();
           final docName = (d['doctorName'] ?? '').toString().trim();
           if (chId.isNotEmpty) {
-            final name = chName.isNotEmpty ? chName : _chamberName(chId);
+            // The chamber may have been renamed since the desk was assigned.
+            final current = await ChamberResolver.resolveChamberName(
+                chamberId: chId, doctorId: docId.isNotEmpty ? docId : null);
+            final name = current.isNotEmpty && current != 'Chamber'
+                ? current
+                : (chName.isNotEmpty ? chName : _chamberName(chId));
             _chamberNames[chId] = name;
             desks.add(_DeskAssignment(
               chamberId: chId,
@@ -173,34 +181,9 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
         }
       }
 
-      if (desks.isEmpty) {
-        final profile = uid == null ? null : await DataService.fetchUserProfile(uid);
-        final assigned = (profile?['operatorAssignments'] as List?)
-                ?.map((value) => value.toString())
-                .where((value) => value.isNotEmpty)
-                .toList() ??
-            AuthService.userRoles.operatorAssignments;
-        final assignedDetails = (profile?['assignedChambers'] as List?) ?? const [];
-        for (final detail in assignedDetails) {
-          if (detail is Map) {
-            final id = (detail['chamberId'] ?? detail['id'] ?? '').toString();
-            final name = (detail['chamberName'] ?? detail['name'] ?? '').toString().trim();
-            if (id.isNotEmpty && name.isNotEmpty) _chamberNames[id] = name;
-          }
-        }
-        for (final chamberId in assigned) {
-          if (!_chamberNames.containsKey(chamberId)) {
-            final chamber = await FirebaseFirestore.instance.collection('chambers').doc(chamberId).get();
-            final data = chamber.data();
-            final name = (data?['name'] ?? data?['chamberName'] ?? data?['hospitalName'] ?? '').toString().trim();
-            if (name.isNotEmpty) _chamberNames[chamberId] = name;
-          }
-          desks.add(_DeskAssignment(
-            chamberId: chamberId,
-            chamberName: _chamberName(chamberId),
-          ));
-        }
-      }
+      // chamber_operators is the only source of desk assignments. The old
+      // users.operatorAssignments list is never read: after an operator
+      // leaves it would bring the chamber back as a ghost desk.
 
       // Recompute handledBy on load, one desk at a time: operators can only
       // read appointments through (chamberId, doctorId).
@@ -265,6 +248,7 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
                         desks: _assignedDesks,
                         doctorsFor: _doctorsFor,
                         isDoctorDesk: _isDoctorDesk,
+                        onChanged: _loadAssignments,
                       );
 
     if (!widget.showAppBar) return body;
@@ -287,11 +271,13 @@ class _ChamberSelectionList extends StatelessWidget {
     required this.desks,
     required this.doctorsFor,
     this.isDoctorDesk = false,
+    this.onChanged,
   });
 
   final List<_DeskAssignment> desks;
   final Future<List<String>> Function(String) doctorsFor;
   final bool isDoctorDesk;
+  final VoidCallback? onChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -322,6 +308,7 @@ class _ChamberSelectionList extends StatelessWidget {
               desk: desk,
               doctors: doctorsFor(desk.chamberId),
               isDoctorDesk: isDoctorDesk,
+              onChanged: onChanged,
             ),
           ),
       ],
@@ -334,11 +321,44 @@ class _ChamberCard extends StatelessWidget {
     required this.desk,
     required this.doctors,
     this.isDoctorDesk = false,
+    this.onChanged,
   });
 
   final _DeskAssignment desk;
   final Future<List<String>> doctors;
   final bool isDoctorDesk;
+  final VoidCallback? onChanged;
+
+  /// An operator stops running this doctor's desk at this chamber.
+  Future<void> _leave(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final doctorId = desk.doctorId;
+    if (doctorId == null || doctorId.isEmpty) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('Leave this chamber?'),
+        content: Text('You will stop running the desk for ${desk.doctorName ?? 'this doctor'} at ${desk.chamberName}. '
+            'The doctor can assign you again later.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppColors.error),
+            onPressed: () => Navigator.pop(c, true),
+            child: const Text('Leave'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await FirestoreService.leaveDesk(chamberId: desk.chamberId, doctorId: doctorId);
+      messenger.showSnackBar(SnackBar(content: Text('You left ${desk.chamberName}.')));
+      onChanged?.call();
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Could not leave. ${friendlyErrorMessage(e)}')));
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -396,7 +416,15 @@ class _ChamberCard extends StatelessWidget {
                     Text('$requestCount requests, $waiting waiting', style: Theme.of(context).textTheme.labelMedium),
                   ],
                 ),
-                trailing: const Icon(Icons.chevron_right),
+                trailing: isDoctorDesk
+                    ? const Icon(Icons.chevron_right)
+                    : PopupMenuButton<String>(
+                        tooltip: 'More',
+                        onSelected: (_) => _leave(context),
+                        itemBuilder: (_) => const [
+                          PopupMenuItem(value: 'leave', child: Text('Leave this chamber')),
+                        ],
+                      ),
                 onTap: () => Navigator.push(
                   context,
                   MaterialPageRoute(
@@ -436,9 +464,13 @@ class _ChamberDeskDetail extends StatelessWidget {
         ? AppointmentQueries.pendingRequestsForDoctor(docId)
         : AppointmentQueries.pendingRequestsForChamber(chamberId, doctorId: doctorId);
 
-    final doneQuery = isDoctorDesk && docId != null
-        ? AppointmentQueries.completedForDoctor(docId)
-        : AppointmentQueries.completedForChamber(chamberId, doctorId: doctorId);
+    final now = DateTime.now();
+    final doneQuery = (isDoctorDesk && docId != null
+            ? AppointmentQueries.completedForDoctor(docId)
+            : AppointmentQueries.completedForChamber(chamberId, doctorId: doctorId))
+        // Today only; earlier days stay in Firestore as history.
+        .where('scheduledTime',
+            isGreaterThanOrEqualTo: Timestamp.fromDate(DateTime(now.year, now.month, now.day)));
 
     return DefaultTabController(
       length: 3,
@@ -1540,6 +1572,12 @@ class _AppointmentListState extends State<_AppointmentList> {
 
         // Today's Queue sorted strictly by queuePosition
         final docs = rawDocs.toList();
+        if (view == _DeskView.requests) {
+          // Oldest request first (sorted here; the query has no orderBy).
+          int ms(QueryDocumentSnapshot<Map<String, dynamic>> d) =>
+              (d.data()['createdAt'] as Timestamp?)?.millisecondsSinceEpoch ?? 0;
+          docs.sort((a, b) => ms(a).compareTo(ms(b)));
+        }
         if (view == _DeskView.queue || view == _DeskView.upcoming) {
           docs.sort((a, b) {
             final posA = (a.data()['queuePosition'] as num? ?? 99999).toInt();
@@ -1851,6 +1889,58 @@ class _AppointmentRow extends StatelessWidget {
     }
   }
 
+  /// Moves a confirmed booking to another free time that day.
+  Future<void> _rescheduleConfirmed(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final selected = await _pickSlot(context, title: 'Reschedule', confirmLabel: 'Move booking');
+    if (selected == null) return;
+    try {
+      await DataService.rescheduleAppointment(appointmentId: reference.id, newTime: selected);
+      messenger.showSnackBar(SnackBar(content: Text('Moved to ${_format12Hour(selected)}. The patient was notified.')));
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Could not reschedule. ${friendlyErrorMessage(e)}')));
+    }
+  }
+
+  /// The desk cancels a booking: token and slot are freed and the patient
+  /// may book again.
+  Future<void> _cancelByDesk(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('Cancel this booking?'),
+        content: Text('$_patientName will be told the visit on ${_dateOnlyLabel()} is cancelled and can book again.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Keep')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppColors.error),
+            onPressed: () => Navigator.pop(c, true),
+            child: const Text('Cancel booking'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await QueueService.finishVisit(reference.id, outcome: ApptStatus.cancelled);
+      await SchedulingService.releaseSlotAndLock(reference.id);
+      final patientUid = (data['userId'] ?? '').toString();
+      if (patientUid.isNotEmpty) {
+        await NotificationService.createNotification(
+          userId: patientUid,
+          title: 'Appointment cancelled',
+          body: 'Your visit with $_doctorName on ${_dateOnlyLabel()} was cancelled by the chamber. You can book again.',
+          type: 'appointment_cancelled',
+          relatedId: reference.id,
+        );
+      }
+      messenger.showSnackBar(SnackBar(content: Text('Booking for $_patientName cancelled.')));
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Could not cancel. ${friendlyErrorMessage(e)}')));
+    }
+  }
+
   Future<void> _checkIn(BuildContext context) async {
     final messenger = ScaffoldMessenger.of(context);
     try {
@@ -2047,6 +2137,24 @@ class _AppointmentRow extends StatelessWidget {
                         onPressed: () => _reject(context),
                         tooltip: 'Reject',
                         icon: const Icon(Icons.close, color: Colors.red),
+                      ),
+                    ],
+                  ),
+                ] else if (view == _DeskView.upcoming && status == ApptStatus.confirmed) ...[
+                  const SizedBox(height: 10),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      TextButton(
+                        onPressed: () => _cancelByDesk(context),
+                        style: TextButton.styleFrom(foregroundColor: AppColors.error),
+                        child: const Text('Cancel'),
+                      ),
+                      const SizedBox(width: 8),
+                      OutlinedButton.icon(
+                        onPressed: () => _rescheduleConfirmed(context),
+                        icon: const Icon(Icons.edit_calendar_outlined, size: 18),
+                        label: const Text('Reschedule'),
                       ),
                     ],
                   ),

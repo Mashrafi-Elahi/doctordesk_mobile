@@ -227,12 +227,27 @@ class FirestoreService {
       debugPrint('Firestore fetchDoctors online failed, falling back to cache/bundled: $e');
     }
 
-    return _fetchDoctorsFallback(
+    final fallback = await _fetchDoctorsFallback(
       page: page,
       limit: limit,
       search: search,
       speciality: speciality,
     );
+    // A name only claimed doctors have (e.g. "mashrafi") finds nothing in the
+    // search index and lands here; they must still lead page 1.
+    if (page == 1) {
+      try {
+        final claimed = await _claimedMatches(normSearch, normSpec);
+        if (claimed.isNotEmpty) {
+          final ids = claimed.map((d) => d.id).toSet();
+          fallback['doctors'] = [
+            ...claimed,
+            ...List<Doctor>.from(fallback['doctors'] as List).where((d) => !ids.contains(d.id)),
+          ];
+        }
+      } catch (_) {}
+    }
+    return fallback;
   }
 
   static Future<void> _cacheDiscoveryDoctorsLocally(List<Doctor> docs) async {
@@ -1303,6 +1318,24 @@ class FirestoreService {
     } catch (_) {}
   }
 
+  /// The signed-in operator leaves a doctor's desk at one chamber: their
+  /// assignment goes, and so does their seat in the doctor's staff chat.
+  static Future<void> leaveDesk({required String chamberId, required String doctorId}) async {
+    final uid = _auth.currentUser?.uid;
+    if (uid == null) throw StateError('Sign in first.');
+    await _db.collection('chamber_operators').doc('${chamberId}_${doctorId}_$uid').delete();
+    try {
+      await _db.collection('chats').doc(ChatService.staffChatId(doctorId)).update({
+        'participants': FieldValue.arrayRemove([uid]),
+        'participantNames.$uid': FieldValue.delete(),
+        'participantRoles.$uid': FieldValue.delete(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      debugPrint('Staff chat leave skipped: $e');
+    }
+  }
+
   /// Keeps the doctor's one staff chat in step with chamber_operators.
   static Future<void> _syncStaffChatFor(String doctorId) async {
     try {
@@ -2338,7 +2371,10 @@ class FirestoreService {
         for (final docId in rec.doctorIds) {
           if (!seenIds.add(docId)) continue;
           final docSnap = await _db.collection('doctors').doc(docId).get();
-          if (docSnap.exists) {
+          // Merged duplicates are hidden and must not show as extra doctors.
+          if (docSnap.exists &&
+              docSnap.data()?['hidden'] != true &&
+              docSnap.data()?['isHidden'] != true) {
             final d = docSnap.data()!;
             final specialities = (d['specialities'] as List?) ?? [];
             result.add({

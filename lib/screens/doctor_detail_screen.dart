@@ -288,6 +288,8 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
           : 'Patient',
     );
     bool isSubmitting = false;
+    // Shown inside the sheet: a snackbar would sit hidden behind it.
+    String? bookingError;
 
     showModalBottomSheet<void>(
       context: context,
@@ -510,6 +512,11 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                       },
                     ),
                     const SizedBox(height: 16),
+                    if (bookingError != null) ...[
+                      Text(bookingError!,
+                          style: TextStyle(color: Colors.red.shade700, fontWeight: FontWeight.w600)),
+                      const SizedBox(height: 10),
+                    ],
                     FilledButton(
                       onPressed: isSubmitting
                           ? null
@@ -561,17 +568,15 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                                   );
                                 }
                               } catch (e) {
-                                setSheetState(() => isSubmitting = false);
-                                if (mounted) {
-                                  final msg = e.toString().contains('already have a request')
-                                      ? 'You already have a request for this doctor on this date.'
-                                      : e is StateError
-                                          ? e.message
-                                          : 'Booking error: $e';
-                                  messenger.showSnackBar(
-                                    SnackBar(content: Text(msg)),
-                                  );
-                                }
+                                final msg = e.toString().contains('already have a request')
+                                    ? 'You already have a request for this doctor on this date.'
+                                    : e is StateError
+                                        ? e.message
+                                        : 'Booking error: $e';
+                                setSheetState(() {
+                                  isSubmitting = false;
+                                  bookingError = msg;
+                                });
                               }
                             },
                       child: isSubmitting
@@ -990,6 +995,11 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
+                                // Bookable doctors: is online booking open today?
+                                if (doctor.isClaimedProfile && (chamber.id ?? '').isNotEmpty) ...[
+                                  _ChamberTodayStatus(chamberId: chamber.id!, doctorId: doctor.id),
+                                  const SizedBox(height: 10),
+                                ],
                                 Row(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
@@ -2001,6 +2011,61 @@ class _SectionCard extends StatelessWidget {
           child,
         ],
       ),
+    );
+  }
+}
+
+/// Today's state of a chamber for patients. Online booking follows the
+/// chamber's booking hours (regular hours, or the desk's change for today);
+/// once those pass the chamber may still run, but only for walk-ins.
+class _ChamberTodayStatus extends StatelessWidget {
+  const _ChamberTodayStatus({required this.chamberId, required this.doctorId});
+
+  final String chamberId;
+  final String doctorId;
+
+  static String _time(DateTime t) {
+    final h = t.hour > 12 ? t.hour - 12 : (t.hour == 0 ? 12 : t.hour);
+    return '$h:${t.minute.toString().padLeft(2, '0')} ${t.hour >= 12 ? 'PM' : 'AM'}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<FreeSlotsResult>(
+      future: SchedulingService.getFreeSlots(chamberId: chamberId, doctorId: doctorId, date: DateTime.now()),
+      builder: (context, snap) {
+        final res = snap.data;
+        if (res == null || res.emptyReason == 'Visiting hours not set') return const SizedBox.shrink();
+        final (Color color, IconData icon, String text) = switch (res) {
+          _ when res.emptyReason == 'Closed' || res.emptyReason == 'Not a visiting day' =>
+            (Colors.red.shade700, Icons.event_busy, 'Closed today'),
+          _ when res.slots.isNotEmpty => (
+              Colors.green.shade700,
+              Icons.check_circle,
+              // End of booking hours = start of the last slot + one slot.
+              'Open today · online booking until ${_time(res.slots.last.add(res.slots.length > 1 ? res.slots[1].difference(res.slots[0]) : const Duration(minutes: 10)))}',
+            ),
+          _ when res.emptyReason == 'Fully booked' =>
+            (Colors.orange.shade800, Icons.directions_walk, 'Fully booked online today · walk-in at the chamber'),
+          _ => (Colors.orange.shade800, Icons.directions_walk, 'Online booking closed today · walk-in at the chamber'),
+        };
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(
+            children: [
+              Icon(icon, size: 16, color: color),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(text, style: TextStyle(color: color, fontWeight: FontWeight.w700, fontSize: 12.5)),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

@@ -1066,3 +1066,21 @@ describe('staff chat, consult chat unlock, inbox hiding', () => {
     await assertFails(setDoc(doc(patientDb, 'users/doctor/inboxHidden/c1'), { hiddenAt: new Date() }));
   });
 });
+
+describe('operator leaves a desk', () => {
+  it('removes only their own assignment and staff-chat seat', async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'chats/staff_doctor-profile'), {
+        type: 'staff', participants: ['doctor', 'operator', 'op2'], doctorUid: 'doctor',
+        doctorId: 'doctor-profile', status: 'active', messageCount: 0,
+      });
+    });
+    const opDb = testEnv.authenticatedContext('operator').firestore();
+    await assertFails(updateDoc(doc(opDb, 'chats/staff_doctor-profile'), { participants: ['doctor'] }));
+    await assertSucceeds(updateDoc(doc(opDb, 'chats/staff_doctor-profile'), { participants: ['doctor', 'op2'] }));
+    await assertSucceeds(deleteDoc(doc(opDb, 'chamber_operators/chamber-a_doctor-profile_operator')));
+    const strangerDb = testEnv.authenticatedContext('stranger').firestore();
+    await testEnv.withSecurityRulesDisabled(async (c) => setDoc(doc(c.firestore(), 'chamber_operators/chamber-a_doctor-profile_op2'), { chamberId: 'chamber-a', doctorId: 'doctor-profile', operatorUid: 'op2' }));
+    await assertFails(deleteDoc(doc(strangerDb, 'chamber_operators/chamber-a_doctor-profile_op2')));
+  });
+});

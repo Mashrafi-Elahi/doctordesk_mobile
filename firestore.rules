@@ -245,6 +245,8 @@ service cloud.firestore {
         resource.data.doctorId != null &&
         getUserData().doctorProfileId == resource.data.doctorId
       );
+      // An operator may leave a desk they run.
+      allow delete: if isAuthenticated() && resource.data.operatorUid == request.auth.uid;
     }
 
     // Active bookings collection: prevents double or multiple active bookings
@@ -584,6 +586,12 @@ service cloud.firestore {
          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
            'participants', 'participantNames', 'participantRoles', 'status',
            'updatedAt', 'chamberId', 'doctorName', 'messageCount'])) ||
+        // An operator leaving takes only themselves out of the staff chat.
+        (isStaffChat() && request.auth.uid in resource.data.participants &&
+         request.auth.uid != resource.data.doctorUid &&
+         request.resource.data.participants == resource.data.participants.removeAll([request.auth.uid]) &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+           'participants', 'participantNames', 'participantRoles', 'updatedAt'])) ||
         // Appointment events bump the staff chat: from a member, or from the
         // patient whose appointment it is.
         (isStaffChat() &&

@@ -20,6 +20,7 @@ import 'settings_screen.dart';
 import 'admin_console_screen.dart';
 import 'chamber_discovery_screen.dart';
 import '../services/firestore_service.dart';
+import '../services/chamber_resolver.dart';
 import '../widgets/health_documents_widget.dart';
 
 class ProfileScreen extends StatefulWidget {
@@ -812,264 +813,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         style: AppTheme.caption,
                       ),
                       const SizedBox(height: 14),
-                      Builder(
-                        builder: (context) {
-                          final assignments = (_userProfile?['operatorAssignments'] as List?)
-                                  ?.map((e) => e.toString())
-                                  .where((e) => e.isNotEmpty)
-                                  .toList() ??
-                              const <String>[];
-                          final assignedChamberMaps = (_userProfile?['assignedChambers'] as List?)
-                                  ?.map((e) => Map<String, dynamic>.from(e as Map))
-                                  .toList() ??
-                              const <Map<String, dynamic>>[];
-
-                          if (assignments.isEmpty) {
-                            return Container(
-                              padding: const EdgeInsets.all(16),
-                              decoration: BoxDecoration(
-                                color: Theme.of(context).colorScheme.primaryContainer,
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Row(
-                                children: [
-                                  Icon(Icons.info_outline, color: Theme.of(context).colorScheme.primary),
-                                  const SizedBox(width: 10),
-                                  const Expanded(
-                                    child: Text(
-                                      'No chambers assigned yet. Please contact an administrator to be assigned to clinic desks.',
-                                      style: TextStyle(fontSize: 12.5),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            );
-                          }
-
-                          return Column(
-                            children: assignments.map((chamberId) {
-                              String chamberName = chamberId;
-                              for (final ac in assignedChamberMaps) {
-                                if (ac['chamberId'] == chamberId || ac['id'] == chamberId) {
-                                  chamberName = (ac['chamberName'] ?? ac['name'] ?? ac['hospitalName'] ?? chamberId).toString();
-                                  break;
-                                }
-                              }
-                              if (chamberName == 'demo-chamber') {
-                                chamberName = 'Popular Central Diagnostic Desk';
-                              } else if (chamberName == 'chamber-bup-1') {
-                                chamberName = 'BUP Medical Center Desk';
-                              } else if (chamberName.startsWith('chamber-')) {
-                                chamberName = 'Chamber Desk (${chamberId.substring(8, 12.clamp(0, chamberId.length))})';
-                              }
-
-                              return Card(
-                                margin: const EdgeInsets.only(bottom: 16),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(14),
-                                  side: BorderSide(color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.18)),
-                                ),
-                                child: Padding(
-                                  padding: const EdgeInsets.all(14),
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      // Chamber Header Row
-                                      Row(
-                                        children: [
-                                          CircleAvatar(
-                                            radius: 18,
-                                            backgroundColor: Theme.of(context).colorScheme.primary,
-                                            child: const Icon(Icons.business_outlined, color: Colors.white, size: 18),
-                                          ),
-                                          const SizedBox(width: 10),
-                                          Expanded(
-                                            child: Column(
-                                              crossAxisAlignment: CrossAxisAlignment.start,
-                                              children: [
-                                                Text(
-                                                  chamberName,
-                                                  style: GoogleFonts.poppins(
-                                                    fontSize: 14.5,
-                                                    fontWeight: FontWeight.w700,
-                                                    color: Theme.of(context).colorScheme.primary,
-                                                  ),
-                                                ),
-                                                Text(
-                                                  'Chamber: $chamberId',
-                                                  style: const TextStyle(fontSize: 11, color: Colors.grey),
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                      const SizedBox(height: 12),
-                                      const Divider(height: 1),
-                                      const SizedBox(height: 10),
-                                      // Doctor Details List for this chamber
-                                      FutureBuilder<List<Map<String, dynamic>>>(
-                                        future: DataService.fetchChamberDoctorDetails(chamberId),
-                                        builder: (ctx, snap) {
-                                          final docs = snap.data ?? [];
-                                          if (snap.connectionState == ConnectionState.waiting) {
-                                            return const Padding(
-                                              padding: EdgeInsets.symmetric(vertical: 12),
-                                              child: Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))),
-                                            );
-                                          }
-                                          if (docs.isEmpty) {
-                                            return Container(
-                                              padding: const EdgeInsets.all(12),
-                                              decoration: BoxDecoration(
-                                                color: Colors.grey.shade50,
-                                                borderRadius: BorderRadius.circular(12),
-                                              ),
-                                              child: Row(
-                                                children: [
-                                                  const Expanded(
-                                                    child: Column(
-                                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                                      children: [
-                                                        Text('Specialist Doctor', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                                                        Text('Visiting Hours: 5:00 PM - 9:00 PM', style: TextStyle(fontSize: 11.5, color: Colors.grey)),
-                                                      ],
-                                                    ),
-                                                  ),
-                                                  FilledButton.tonalIcon(
-                                                    onPressed: () {
-                                                      Navigator.push(
-                                                        context,
-                                                        MaterialPageRoute(
-                                                          // The desk list knows each chamber's doctor, which the
-                                                          // chamber-scoped queries need.
-                                                          builder: (_) => const OperatorDeskScreen(),
-                                                        ),
-                                                      );
-                                                    },
-                                                    icon: const Icon(Icons.queue, size: 16),
-                                                    label: const Text('Open Queue', style: TextStyle(fontSize: 12)),
-                                                  ),
-                                                ],
-                                              ),
-                                            );
-                                          }
-
-                                          return Column(
-                                            children: docs.map((docInfo) {
-                                              final dName = (docInfo['name'] ?? 'Doctor').toString();
-                                              final dHours = (docInfo['hours'] ?? '5:00 PM - 9:00 PM').toString();
-                                              final dSpec = (docInfo['speciality'] ?? 'Specialist').toString();
-
-                                              return Container(
-                                                margin: const EdgeInsets.only(bottom: 8),
-                                                padding: const EdgeInsets.all(12),
-                                                decoration: BoxDecoration(
-                                                  color: Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.5),
-                                                  borderRadius: BorderRadius.circular(12),
-                                                  border: Border.all(color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.1)),
-                                                ),
-                                                child: Row(
-                                                  children: [
-                                                    Expanded(
-                                                      child: Column(
-                                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                                        children: [
-                                                          Text(
-                                                            dName,
-                                                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5),
-                                                          ),
-                                                          const SizedBox(height: 2),
-                                                          Text(
-                                                            dSpec,
-                                                            style: TextStyle(fontSize: 11, color: Colors.grey.shade700, fontWeight: FontWeight.w500),
-                                                          ),
-                                                          const SizedBox(height: 4),
-                                                          Row(
-                                                            children: [
-                                                              const Icon(Icons.access_time, size: 12, color: Colors.grey),
-                                                              const SizedBox(width: 4),
-                                                              Expanded(
-                                                                child: Text(
-                                                                  dHours,
-                                                                  style: const TextStyle(fontSize: 11, color: Colors.grey),
-                                                                  maxLines: 1,
-                                                                  overflow: TextOverflow.ellipsis,
-                                                                ),
-                                                              ),
-                                                            ],
-                                                          ),
-                                                        ],
-                                                      ),
-                                                    ),
-                                                    const SizedBox(width: 8),
-                                                    Column(
-                                                      crossAxisAlignment: CrossAxisAlignment.end,
-                                                      children: [
-                                                        StreamBuilder<int>(
-                                                          stream: DataService.streamTodayWaitingCount(
-                                                            chamberId,
-                                                            doctorId: docInfo['doctorId']?.toString(),
-                                                          ),
-                                                          builder: (ctx, countSnap) {
-                                                            final count = countSnap.data ?? 0;
-                                                            return Container(
-                                                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                                              decoration: BoxDecoration(
-                                                                color: count > 0 ? Colors.amber.shade100 : Colors.green.shade50,
-                                                                borderRadius: BorderRadius.circular(12),
-                                                                border: Border.all(
-                                                                  color: count > 0 ? Colors.amber.shade300 : Colors.green.shade200,
-                                                                ),
-                                                              ),
-                                                              child: Text(
-                                                                '$count Waiting',
-                                                                style: TextStyle(
-                                                                  fontSize: 11,
-                                                                  fontWeight: FontWeight.bold,
-                                                                  color: count > 0 ? const Color(0xFF78350F) : Colors.green.shade800,
-                                                                ),
-                                                              ),
-                                                            );
-                                                          },
-                                                        ),
-                                                        const SizedBox(height: 8),
-                                                        FilledButton.tonal(
-                                                          style: FilledButton.styleFrom(
-                                                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                                                            minimumSize: const Size(0, 32),
-                                                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                                                          ),
-                                                          onPressed: () {
-                                                            Navigator.push(
-                                                              context,
-                                                              MaterialPageRoute(
-                                                                builder: (_) => OperatorDeskScreen(
-                                                                  chamberId: chamberId,
-                                                                  doctorId: docInfo['doctorId']?.toString(),
-                                                                ),
-                                                              ),
-                                                            );
-                                                          },
-                                                          child: const Text('Open Queue', style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.bold)),
-                                                        ),
-                                                      ],
-                                                    ),
-                                                  ],
-                                                ),
-                                              );
-                                            }).toList(),
-                                          );
-                                        },
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              );
-                            }).toList(),
-                          );
-                        },
-                      ),
+                      const _OperatorDeskSummary(),
                     ],
                   ),
                 ),
@@ -1273,4 +1017,57 @@ class _SettingsItem {
     required this.title,
     required this.onTap,
   });
+}
+
+/// The operator's desks, from chamber_operators (the same source the Desk tab
+/// uses), with the chamber's current name. The old users.operatorAssignments
+/// list kept showing chambers after the operator left them.
+class _OperatorDeskSummary extends StatelessWidget {
+  const _OperatorDeskSummary();
+
+  @override
+  Widget build(BuildContext context) {
+    final uid = AuthService.currentUser?.uid;
+    if (uid == null) return const SizedBox.shrink();
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('chamber_operators')
+          .where('operatorUid', isEqualTo: uid)
+          .snapshots(),
+      builder: (context, snap) {
+        if (!snap.hasData) return const LinearProgressIndicator(minHeight: 2);
+        final docs = snap.data!.docs;
+        if (docs.isEmpty) {
+          return const Text(
+            'No chambers assigned. A doctor assigns you to their desk from their Manage tab.',
+            style: TextStyle(fontSize: 12.5),
+          );
+        }
+        return Column(
+          children: [
+            for (final d in docs)
+              FutureBuilder<String>(
+                future: ChamberResolver.resolveChamberName(
+                  chamberId: (d.data()['chamberId'] ?? '').toString(),
+                  doctorId: d.data()['doctorId']?.toString(),
+                ),
+                builder: (context, name) => ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.business_outlined),
+                  title: Text(name.data ?? (d.data()['chamberName'] ?? 'Chamber').toString()),
+                  subtitle: Text((d.data()['doctorName'] ?? 'Doctor').toString()),
+                  trailing: TextButton(
+                    onPressed: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const OperatorDeskScreen()),
+                    ),
+                    child: const Text('Open desk'),
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
 }

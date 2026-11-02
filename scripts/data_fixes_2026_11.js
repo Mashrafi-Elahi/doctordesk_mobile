@@ -243,9 +243,25 @@ async function stripOperators() {
     plan(`chamber_operators/${d.id}: remove operatorEmail`, (b) => b.update(d.ref, { operatorEmail: FV.delete() })));
 }
 
+// The unclaimed test profile "Dr. Mashrafi" (Bup Medical) duplicates the real
+// Dr. Mashrafi Elahi.
+async function hideMashrafiDuplicate() {
+  const snap = await db.collection('doctors').where('name', '==', 'Dr. Mashrafi').get();
+  snap.docs.filter((d) => !d.get('claimedByUid') && !d.get('hidden')).forEach((d) =>
+    plan(`hide duplicate doctors/${d.id} "${d.get('name')}"`, (b) =>
+      b.update(d.ref, { hidden: true, isHidden: true, mergedInto: MASHRAFI, updatedAt: FV.serverTimestamp() })));
+}
+
 (async () => {
   initializeAdmin(admin);
   db = admin.firestore();
+  if (process.argv.includes('--hide-mashrafi-dup')) {
+    await hideMashrafiDuplicate();
+    ops.forEach((o, i) => console.log(`${String(i + 1).padStart(2)}. ${o.desc}`));
+    if (APPLY) for (const o of ops) { const b = db.batch(); o.fn(b); await b.commit(); }
+    console.log(APPLY ? `\nApplied ${ops.length} changes.` : '\nDry run. Add --apply to write.');
+    process.exit(0);
+  }
   if (process.argv.includes('--strip-operators')) {
     await stripOperators();
     ops.forEach((o, i) => console.log(`${String(i + 1).padStart(2)}. ${o.desc}`));
