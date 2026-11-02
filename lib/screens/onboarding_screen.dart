@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'main_shell.dart';
@@ -12,6 +14,35 @@ class OnboardingScreen extends StatefulWidget {
 class _OnboardingScreenState extends State<OnboardingScreen> {
   final PageController _pageController = PageController();
   int _currentPage = 0;
+  // Slides advance on their own; the last one opens the app. A swipe or tap
+  // restarts the countdown so the user is never rushed mid-read.
+  static const _slideTime = Duration(seconds: 4);
+  Timer? _autoTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _scheduleAdvance();
+  }
+
+  void _scheduleAdvance() {
+    _autoTimer?.cancel();
+    _autoTimer = Timer(_slideTime, () {
+      if (!mounted) return;
+      if (_currentPage >= _onboardingData.length - 1) {
+        _completeOnboarding();
+      } else {
+        _pageController.nextPage(duration: const Duration(milliseconds: 400), curve: Curves.easeInOut);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _autoTimer?.cancel();
+    _pageController.dispose();
+    super.dispose();
+  }
 
   final List<Map<String, String>> _onboardingData = [
     {
@@ -33,6 +64,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   ];
 
   Future<void> _completeOnboarding() async {
+    _autoTimer?.cancel();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('hasSeenOnboarding', true);
     if (!mounted) return;
@@ -64,6 +96,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   setState(() {
                     _currentPage = index;
                   });
+                  _scheduleAdvance();
                 },
                 itemCount: _onboardingData.length,
                 itemBuilder: (context, index) {

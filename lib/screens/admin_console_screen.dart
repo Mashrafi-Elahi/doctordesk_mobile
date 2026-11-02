@@ -906,6 +906,198 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
             ],
 
 
+            // 1. Claims Section (first: pending claims need action)
+            _sectionTitle('CLAIMS'),
+            Card(
+              child: ListTile(
+                leading: const Icon(Icons.link, color: Colors.indigo),
+                title: const Text('Assign Doctor Profile to Email', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5)),
+                subtitle: const Text('Link a doctor profile directly to a registered user account by email (e.g. Dr. Nuzhat Saima).', style: TextStyle(fontSize: 12)),
+                trailing: FilledButton.tonal(
+                  onPressed: _showAssignDoctorToEmailDialog,
+                  child: const Text('Assign'),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Physicians who submit BMDC documentation to claim their directory profile.',
+                      style: TextStyle(fontSize: 12.5, color: Colors.grey),
+                    ),
+                    const SizedBox(height: 12),
+                    SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: [
+                          for (final s in ['all', 'pending', 'approved', 'rejected'])
+                            Padding(
+                              padding: const EdgeInsets.only(right: 6),
+                              child: ChoiceChip(
+                                label: Text(
+                                  s.toUpperCase(),
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                    color: _claimStatusFilter == s ? Colors.white : Colors.black87,
+                                  ),
+                                ),
+                                selected: _claimStatusFilter == s,
+                                selectedColor: Colors.deepPurple.shade600,
+                                onSelected: (sel) {
+                                  if (sel) setState(() => _claimStatusFilter = s);
+                                },
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    StreamBuilder<List<Map<String, dynamic>>>(
+                      stream: FirestoreService.streamClaimRequests(
+                        statusFilter: _claimStatusFilter == 'all' ? null : _claimStatusFilter,
+                      ),
+                      builder: (context, snapshot) {
+                        if (snapshot.connectionState == ConnectionState.waiting) {
+                          return const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 20),
+                            child: Center(child: CircularProgressIndicator()),
+                          );
+                        }
+                        final claims = snapshot.data ?? [];
+                        if (claims.isEmpty) {
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 20),
+                            child: Center(
+                              child: Text(
+                                'No claim requests with status "$_claimStatusFilter".',
+                                style: const TextStyle(fontSize: 12, color: Colors.grey),
+                              ),
+                            ),
+                          );
+                        }
+                        return Column(
+                          children: claims.map((claim) {
+                            final docName = (claim['doctorName'] ?? 'Doctor Profile').toString();
+                            final applicantName = (claim['applicantName'] ?? 'Applicant').toString();
+                            final applicantEmail = (claim['applicantEmail'] ?? '').toString();
+                            final bmdc = (claim['bmdcNumber'] ?? 'None').toString();
+                            final status = (claim['status'] ?? 'pending').toString().toLowerCase();
+
+                            Color stColor = Colors.orange;
+                            if (status == 'approved') stColor = Colors.green;
+                            if (status == 'rejected') stColor = Colors.red;
+
+                            return Container(
+                              margin: const EdgeInsets.symmetric(vertical: 6),
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Colors.deepPurple.shade50.withValues(alpha: 0.4),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: Colors.deepPurple.shade100),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          docName,
+                                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5),
+                                        ),
+                                      ),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                        decoration: BoxDecoration(
+                                          color: stColor.withValues(alpha: 0.15),
+                                          borderRadius: BorderRadius.circular(12),
+                                          border: Border.all(color: stColor),
+                                        ),
+                                        child: Text(
+                                          status.toUpperCase(),
+                                          style: TextStyle(color: stColor, fontWeight: FontWeight.bold, fontSize: 10),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text('Claimed By: $applicantName ($applicantEmail)',
+                                      style: const TextStyle(fontSize: 11.5, color: Colors.black87)),
+                                  Text('BMDC Reg Number: $bmdc',
+                                      style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.bold)),
+                                  if (claim['rejectionReason'] != null)
+                                    Padding(
+                                      padding: const EdgeInsets.only(top: 4),
+                                      child: Text(
+                                        'Rejection reason: ${claim['rejectionReason']}',
+                                        style: const TextStyle(fontSize: 11, color: Colors.red),
+                                      ),
+                                    ),
+                                  const SizedBox(height: 8),
+                                  if (status == 'pending')
+                                    // Wraps on narrow phones instead of running
+                                    // the Approve button off the card.
+                                    Wrap(
+                                      alignment: WrapAlignment.end,
+                                      spacing: 6,
+                                      runSpacing: 6,
+                                      children: [
+                                        OutlinedButton.icon(
+                                          icon: const Icon(Icons.open_in_browser, size: 13),
+                                          label: const Text('BMDC Check', style: TextStyle(fontSize: 11)),
+                                          style: OutlinedButton.styleFrom(visualDensity: VisualDensity.compact),
+                                          onPressed: () async {
+                                            await Navigator.push<bool>(
+                                              context,
+                                              MaterialPageRoute(
+                                                builder: (_) => BmdcVerificationScreen(
+                                                  doctorId: (claim['doctorId'] ?? '').toString(),
+                                                  doctorName: (claim['doctorName'] ?? 'Doctor').toString(),
+                                                  bmdcNumber: bmdc,
+                                                  currentStatus: 'pending',
+                                                ),
+                                              ),
+                                            );
+                                          },
+                                        ),
+                                        OutlinedButton(
+                                          style: OutlinedButton.styleFrom(
+                                            foregroundColor: Colors.red,
+                                            visualDensity: VisualDensity.compact,
+                                          ),
+                                          onPressed: _loading ? null : () => _rejectClaim(claim),
+                                          child: const Text('Reject', style: TextStyle(fontSize: 11)),
+                                        ),
+                                        FilledButton(
+                                          style: FilledButton.styleFrom(
+                                            backgroundColor: AppColors.success,
+                                            visualDensity: VisualDensity.compact,
+                                          ),
+                                          onPressed: _loading ? null : () => _approveClaim(claim),
+                                          child: const Text('Approve Claim', style: TextStyle(fontSize: 11)),
+                                        ),
+                                      ],
+                                    ),
+                                ],
+                              ),
+                            );
+                          }).toList(),
+                        );
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+            const SizedBox(height: 20),
+
             // 1. Verification Section
             _sectionTitle('VERIFICATION'),
             Card(
@@ -1357,196 +1549,6 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                           ),
                         );
                       }),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 20),
-            const SizedBox(height: 20),
-
-            // 2. Claims Section
-            _sectionTitle('CLAIMS'),
-            Card(
-              child: ListTile(
-                leading: const Icon(Icons.link, color: Colors.indigo),
-                title: const Text('Assign Doctor Profile to Email', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5)),
-                subtitle: const Text('Link a doctor profile directly to a registered user account by email (e.g. Dr. Nuzhat Saima).', style: TextStyle(fontSize: 12)),
-                trailing: FilledButton.tonal(
-                  onPressed: _showAssignDoctorToEmailDialog,
-                  child: const Text('Assign'),
-                ),
-              ),
-            ),
-            const SizedBox(height: 12),
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Physicians who submit BMDC documentation to claim their directory profile.',
-                      style: TextStyle(fontSize: 12.5, color: Colors.grey),
-                    ),
-                    const SizedBox(height: 12),
-                    SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: Row(
-                        children: [
-                          for (final s in ['all', 'pending', 'approved', 'rejected'])
-                            Padding(
-                              padding: const EdgeInsets.only(right: 6),
-                              child: ChoiceChip(
-                                label: Text(
-                                  s.toUpperCase(),
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.bold,
-                                    color: _claimStatusFilter == s ? Colors.white : Colors.black87,
-                                  ),
-                                ),
-                                selected: _claimStatusFilter == s,
-                                selectedColor: Colors.deepPurple.shade600,
-                                onSelected: (sel) {
-                                  if (sel) setState(() => _claimStatusFilter = s);
-                                },
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    StreamBuilder<List<Map<String, dynamic>>>(
-                      stream: FirestoreService.streamClaimRequests(
-                        statusFilter: _claimStatusFilter == 'all' ? null : _claimStatusFilter,
-                      ),
-                      builder: (context, snapshot) {
-                        if (snapshot.connectionState == ConnectionState.waiting) {
-                          return const Padding(
-                            padding: EdgeInsets.symmetric(vertical: 20),
-                            child: Center(child: CircularProgressIndicator()),
-                          );
-                        }
-                        final claims = snapshot.data ?? [];
-                        if (claims.isEmpty) {
-                          return Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 20),
-                            child: Center(
-                              child: Text(
-                                'No claim requests with status "$_claimStatusFilter".',
-                                style: const TextStyle(fontSize: 12, color: Colors.grey),
-                              ),
-                            ),
-                          );
-                        }
-                        return Column(
-                          children: claims.map((claim) {
-                            final docName = (claim['doctorName'] ?? 'Doctor Profile').toString();
-                            final applicantName = (claim['applicantName'] ?? 'Applicant').toString();
-                            final applicantEmail = (claim['applicantEmail'] ?? '').toString();
-                            final bmdc = (claim['bmdcNumber'] ?? 'None').toString();
-                            final status = (claim['status'] ?? 'pending').toString().toLowerCase();
-
-                            Color stColor = Colors.orange;
-                            if (status == 'approved') stColor = Colors.green;
-                            if (status == 'rejected') stColor = Colors.red;
-
-                            return Container(
-                              margin: const EdgeInsets.symmetric(vertical: 6),
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: Colors.deepPurple.shade50.withValues(alpha: 0.4),
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(color: Colors.deepPurple.shade100),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    children: [
-                                      Expanded(
-                                        child: Text(
-                                          docName,
-                                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5),
-                                        ),
-                                      ),
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                        decoration: BoxDecoration(
-                                          color: stColor.withValues(alpha: 0.15),
-                                          borderRadius: BorderRadius.circular(12),
-                                          border: Border.all(color: stColor),
-                                        ),
-                                        child: Text(
-                                          status.toUpperCase(),
-                                          style: TextStyle(color: stColor, fontWeight: FontWeight.bold, fontSize: 10),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text('Claimed By: $applicantName ($applicantEmail)',
-                                      style: const TextStyle(fontSize: 11.5, color: Colors.black87)),
-                                  Text('BMDC Reg Number: $bmdc',
-                                      style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.bold)),
-                                  if (claim['rejectionReason'] != null)
-                                    Padding(
-                                      padding: const EdgeInsets.only(top: 4),
-                                      child: Text(
-                                        'Rejection reason: ${claim['rejectionReason']}',
-                                        style: const TextStyle(fontSize: 11, color: Colors.red),
-                                      ),
-                                    ),
-                                  const SizedBox(height: 8),
-                                  if (status == 'pending')
-                                    Row(
-                                      mainAxisAlignment: MainAxisAlignment.end,
-                                      children: [
-                                        OutlinedButton.icon(
-                                          icon: const Icon(Icons.open_in_browser, size: 13),
-                                          label: const Text('BMDC Check', style: TextStyle(fontSize: 11)),
-                                          style: OutlinedButton.styleFrom(visualDensity: VisualDensity.compact),
-                                          onPressed: () async {
-                                            await Navigator.push<bool>(
-                                              context,
-                                              MaterialPageRoute(
-                                                builder: (_) => BmdcVerificationScreen(
-                                                  doctorId: (claim['doctorId'] ?? '').toString(),
-                                                  doctorName: (claim['doctorName'] ?? 'Doctor').toString(),
-                                                  bmdcNumber: bmdc,
-                                                  currentStatus: 'pending',
-                                                ),
-                                              ),
-                                            );
-                                          },
-                                        ),
-                                        const SizedBox(width: 6),
-                                        OutlinedButton(
-                                          style: OutlinedButton.styleFrom(
-                                            foregroundColor: Colors.red,
-                                            visualDensity: VisualDensity.compact,
-                                          ),
-                                          onPressed: _loading ? null : () => _rejectClaim(claim),
-                                          child: const Text('Reject', style: TextStyle(fontSize: 11)),
-                                        ),
-                                        const SizedBox(width: 8),
-                                        FilledButton(
-                                          style: FilledButton.styleFrom(
-                                            backgroundColor: AppColors.success,
-                                            visualDensity: VisualDensity.compact,
-                                          ),
-                                          onPressed: _loading ? null : () => _approveClaim(claim),
-                                          child: const Text('Approve Claim', style: TextStyle(fontSize: 11)),
-                                        ),
-                                      ],
-                                    ),
-                                ],
-                              ),
-                            );
-                          }).toList(),
-                        );
-                      },
-                    ),
                   ],
                 ),
               ),

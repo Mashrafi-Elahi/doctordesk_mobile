@@ -413,7 +413,7 @@ class _ChamberCard extends StatelessWidget {
                         },
                       ),
                     const SizedBox(height: 7),
-                    Text('$requestCount requests, $waiting waiting', style: Theme.of(context).textTheme.labelMedium),
+                    Text('$requestCount ${requestCount == 1 ? 'request' : 'requests'}, $waiting waiting', style: Theme.of(context).textTheme.labelMedium),
                   ],
                 ),
                 trailing: isDoctorDesk
