@@ -93,6 +93,20 @@ class _DoctorManagerScreenState extends State<DoctorManagerScreen> {
             if ((rec.visitingHours ?? '').isNotEmpty) c['visitingHours'] = rec.visitingHours;
             if (rec.name.isNotEmpty) c['hospitalName'] = rec.name;
           }
+          // Who runs each desk now lives only in chamber_operators (public
+          // docs no longer carry it); the doctor may read their own.
+          final desks = await FirebaseFirestore.instance
+              .collection('chamber_operators')
+              .where('doctorId', isEqualTo: docId)
+              .get();
+          for (final c in fetched) {
+            final match = desks.docs.where((d) => d.data()['chamberId'] == c['id']);
+            if (match.isEmpty) continue;
+            final op = match.first.data();
+            c['hasOperator'] = true;
+            c['operatorUid'] = op['operatorUid'];
+            c['operatorName'] = op['operatorName'];
+          }
           _chambers = fetched;
           await prefs.setString(cacheKey, jsonEncode(_chambers));
         }

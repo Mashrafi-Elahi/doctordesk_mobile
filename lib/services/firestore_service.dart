@@ -2708,10 +2708,17 @@ class FirestoreService {
     }
     return query.snapshots().map(
       (snap) {
+        // Rejected claims leave the console 24 h after review; the record
+        // stays in Firestore.
+        final cutoff = DateTime.now().subtract(const Duration(hours: 24));
         final list = snap.docs.map((d) {
           final data = Map<String, dynamic>.from(d.data());
           data['id'] = d.id;
           return data;
+        }).where((c) {
+          if (c['status'] != 'rejected') return true;
+          final at = (c['reviewedAt'] as Timestamp?)?.toDate();
+          return at == null || at.isAfter(cutoff);
         }).toList();
         list.sort((a, b) {
           final aTime = a['submittedAt'] as Timestamp?;

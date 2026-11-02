@@ -49,6 +49,24 @@ class _FeedScreenState extends State<FeedScreen> {
     };
   }
 
+  /// Feed order: Relevant (default) or Newest.
+  bool _newestFirst = false;
+
+  /// "Relevant" without a real algorithm: videos and detailed, discussed,
+  /// doctor-written or answered posts rank up; the score fades over ~2 days
+  /// so fresh posts still surface.
+  static double _relevance(Map<String, dynamic> d) {
+    final created = (d['createdAt'] as Timestamp?)?.toDate() ?? DateTime(2000);
+    final ageHours = DateTime.now().difference(created).inMinutes / 60.0;
+    var score = 0.0;
+    if (d['type'] == 'video') score += 3;
+    score += ((d['content'] ?? '').toString().length / 300).clamp(0, 3);
+    score += ((d['commentsCount'] as num?) ?? 0) * 0.5;
+    if (d['authorRole'] == 'doctor' || d['isBmdcVerified'] == true) score += 1.5;
+    if (d['answer'] != null) score += 1;
+    return score / (1 + ageHours / 48);
+  }
+
   void _openCreatePost({String? initialType}) {
     Navigator.push(
       context,
@@ -94,6 +112,12 @@ class _FeedScreenState extends State<FeedScreen> {
               child: ListView(
                 scrollDirection: Axis.horizontal,
                 children: [
+                  ActionChip(
+                    avatar: Icon(_newestFirst ? Icons.schedule : Icons.auto_awesome, size: 16),
+                    label: Text(_newestFirst ? 'Newest' : 'Relevant'),
+                    onPressed: () => setState(() => _newestFirst = !_newestFirst),
+                  ),
+                  const SizedBox(width: 8),
                   _buildFilterChip('All'),
                   const SizedBox(width: 8),
                   _buildFilterChip('Videos'),
@@ -143,7 +167,10 @@ class _FeedScreenState extends State<FeedScreen> {
                     ? rawDocs
                         .where((doc) => doc.data()['userId'] == currentUid)
                         .toList()
-                    : rawDocs;
+                    : rawDocs.toList();
+                if (!_newestFirst) {
+                  docs.sort((a, b) => _relevance(b.data()).compareTo(_relevance(a.data())));
+                }
 
                 if (docs.isEmpty) {
                   return Center(
