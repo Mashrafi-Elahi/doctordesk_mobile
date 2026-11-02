@@ -1,4 +1,5 @@
 import '../widgets/user_avatar.dart';
+import '../widgets/profile_avatar_button.dart';
 import '../models/user_role.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -12,7 +13,6 @@ import 'appointment_screen.dart';
 import 'doctor_detail_screen.dart';
 import 'doctors_screen.dart';
 import 'nearby_doctors_screen.dart';
-import 'profile_screen.dart';
 import '../services/auth_service.dart';
 import '../services/specialty_matcher.dart';
 import '../services/gemini_service.dart';
@@ -450,15 +450,9 @@ class _HomeScreenState extends State<HomeScreen> {
                         // Top row: avatar (circle, 44) + "Welcome" & username on left, notification bell on right
                         Row(
                           children: [
+                            // Same switcher as every top bar: portals + profile.
                             GestureDetector(
-                              onTap: () {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => const ProfileScreen(),
-                                  ),
-                                );
-                              },
+                              onTap: () => ProfileAvatarButton.openFor(context),
                               child: const UserAvatar.me(radius: 22, ring: true),
                             ),
                             const SizedBox(width: 12),

@@ -64,7 +64,10 @@ class Chamber {
       location: json['location'] as String?,
       lat: (json['lat'] as num?)?.toDouble(),
       lng: (json['lng'] as num?)?.toDouble(),
-      visitingHours: json['visitingHours'] as String?,
+      // Saved as text on older chambers, {display, days, start, end} on newer.
+      visitingHours: json['visitingHours'] is Map
+          ? ((json['visitingHours'] as Map)['display'] ?? json['visitingHoursDisplay'])?.toString()
+          : json['visitingHours'] as String?,
       fee: (json['fee'] as num?)?.toInt(),
       accessibility: accessibility,
       isAccessible: rawIsAccessible,

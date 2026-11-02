@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:google_sign_in/google_sign_in.dart';
@@ -97,6 +98,13 @@ class AuthService {
     return UserRole.patient;
   }
 
+  /// The portal stored by [saveRole], whether or not roles have loaded yet.
+  static Future<UserRole?> lastChosenRole() async {
+    final prefs = await SharedPreferences.getInstance();
+    final name = prefs.getString('user_role');
+    return UserRole.values.where((r) => r.name == name).firstOrNull;
+  }
+
   static Future<void> saveRole(UserRole role) async {
     // Disallow switching to a role that has not been granted
     final effectiveRole = isRoleGranted(role) ? role : UserRole.patient;
@@ -143,7 +151,30 @@ class AuthService {
       if (uid != null) {
         final profile = await ApiService.fetchUserProfile(uid);
         if (profile != null) {
-          _currentUserRoles = UserRoles.fromJson(profile);
+          var roles = UserRoles.fromJson(profile);
+          // isOperator can outlive the last desk (an operator can't edit
+          // their own roles); the portal follows real assignments.
+          if (roles.isOperator) {
+            try {
+              final desks = await FirebaseFirestore.instance
+                  .collection('chamber_operators')
+                  .where('operatorUid', isEqualTo: uid)
+                  .limit(1)
+                  .get();
+              if (desks.docs.isEmpty) {
+                roles = UserRoles(
+                  isDoctor: roles.isDoctor,
+                  isOperator: false,
+                  isAdmin: roles.isAdmin,
+                  isModerator: roles.isModerator,
+                  chamberCount: roles.chamberCount,
+                  doctorProfileId: roles.doctorProfileId,
+                );
+                profile['roles'] = {...(profile['roles'] as Map? ?? {}), 'isOperator': false};
+              }
+            } catch (_) {}
+          }
+          _currentUserRoles = roles;
           await _cacheRoles(uid, profile);
           return _currentUserRoles;
         }

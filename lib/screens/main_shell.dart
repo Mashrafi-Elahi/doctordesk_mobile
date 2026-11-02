@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import '../services/role_switch.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -45,6 +46,8 @@ class MainShellState extends State<MainShell> {
   void initState() {
     super.initState();
     _currentRole = widget.initialRole;
+    RoleSwitch.current.value = _currentRole;
+    RoleSwitch.attach(setRole);
     _refreshRoles();
     _authSubscription = AuthService.authStateChanges.listen((_) {
       _refreshRoles();
@@ -76,6 +79,9 @@ class MainShellState extends State<MainShell> {
 
   Future<void> _refreshRoles() async {
     final roles = await AuthService.fetchUserRoles();
+    // Startup may have fallen back to patient before roles arrived; the
+    // first load restores the portal the user last chose.
+    final lastChosen = _rolesLoaded ? null : await AuthService.lastChosenRole();
     if (mounted) {
       // A different account signing in starts in its own main portal instead
       // of inheriting the previous account's role.
@@ -86,10 +92,11 @@ class MainShellState extends State<MainShell> {
       setState(() {
         _userRoles = roles;
         _currentRole = sameUser
-            ? _roleFor(roles, preferred: _currentRole)
+            ? _roleFor(roles, preferred: lastChosen ?? _currentRole)
             : _roleFor(roles, preferred: null);
       });
       RoleThemeController.setRole(_currentRole);
+      RoleSwitch.current.value = _currentRole;
       if (!sameUser && uid != null) AuthService.saveRole(_currentRole);
     }
   }
@@ -113,6 +120,7 @@ class MainShellState extends State<MainShell> {
   @override
   void dispose() {
     _authSubscription?.cancel();
+    RoleSwitch.detach();
     super.dispose();
   }
 
@@ -128,6 +136,7 @@ class MainShellState extends State<MainShell> {
       }
     });
     RoleThemeController.setRole(role);
+    RoleSwitch.current.value = role;
     AuthService.saveRole(role);
   }
 

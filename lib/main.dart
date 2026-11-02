@@ -33,6 +33,10 @@ void main() async {
   }
 
   await AuthService.loadGuestMode();
+  // On a cold start the signed-in user can arrive a moment after init; read
+  // the saved portal only once it is known.
+  await AuthService.authStateChanges.first
+      .timeout(const Duration(seconds: 2), onTimeout: () => null);
   // Cached roles open the app at once and refresh in the background; only a
   // first launch waits on the network, and never more than 4 seconds.
   if (await AuthService.loadCachedRoles()) {

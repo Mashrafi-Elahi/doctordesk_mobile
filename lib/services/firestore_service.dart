@@ -1187,6 +1187,10 @@ class FirestoreService {
     required String operatorName,
     required String operatorEmail,
   }) async {
+    final docForCheck = await _db.collection('doctors').doc(doctorId).get();
+    if ((docForCheck.data()?['claimedByUid'] ?? '') == operatorUid) {
+      throw StateError('A doctor runs their own queue; assign someone else as the desk operator.');
+    }
     // 1. Resolve human-readable chamber name and doctor name
     final docRef = _db.collection('doctors').doc(doctorId);
     final docSnap = await docRef.get();

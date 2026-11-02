@@ -242,20 +242,132 @@ class _DoctorManagerScreenState extends State<DoctorManagerScreen> {
     _showChamberDialog();
   }
 
+  /// Hours are stored as text on older entries and as {display, days, …}
+  /// on newer ones.
+  static String _hoursText(dynamic v) {
+    final text = v is Map ? (v['display'] ?? '').toString().trim() : (v is String ? v.trim() : '');
+    return text == 'Visiting hours not set' ? '' : text;
+  }
+
+  /// Lets a doctor join a chamber that is already listed instead of
+  /// creating a second copy of it.
+  Future<Map<String, String>?> _pickExistingChamber(BuildContext context) async {
+    // The directory import made one chamber doc per listed doctor, so the
+    // same hospital appears many times; show it once, preferring a doc a
+    // doctor on the app owns.
+    final Map<String, Map<String, String>> byPlace = {};
+    try {
+      final snap = await FirebaseFirestore.instance.collection('chambers').limit(500).get();
+      for (final doc in snap.docs) {
+        final d = doc.data();
+        if (d['status'] == 'removed' || d['isHidden'] == true) continue;
+        if ((d['canonicalChamberId'] ?? '').toString().isNotEmpty) continue;
+        if (_chambers.any((c) => c['id'] == doc.id)) continue;
+        final name = (d['hospitalName'] ?? d['name'] ?? '').toString().trim();
+        if (name.isEmpty) continue;
+        final option = {
+          'id': doc.id,
+          'name': name,
+          'area': (d['area'] ?? '').toString().trim(),
+          'hours': _hoursText(d['visitingHours'] ?? d['visitingHoursDisplay']),
+          'owner': (d['ownerDoctorId'] ?? '').toString(),
+        };
+        final key = '${name.toLowerCase()}|${option['area']!.toLowerCase()}';
+        final seen = byPlace[key];
+        if (seen == null || (seen['owner']!.isEmpty && option['owner']!.isNotEmpty)) {
+          byPlace[key] = option;
+        }
+      }
+    } catch (e) {
+      debugPrint('Could not load chambers: $e');
+    }
+    final options = byPlace.values.toList();
+    options.sort((a, b) => a['name']!.toLowerCase().compareTo(b['name']!.toLowerCase()));
+    if (!context.mounted) return null;
+
+    var query = '';
+    return showModalBottomSheet<Map<String, String>>(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheet) => StatefulBuilder(
+        builder: (sheet, setSheetState) {
+          final q = query.toLowerCase();
+          final shown = options
+              .where((o) => q.isEmpty || o['name']!.toLowerCase().contains(q) || o['area']!.toLowerCase().contains(q))
+              .toList();
+          return Padding(
+            padding: EdgeInsets.only(bottom: MediaQuery.of(sheet).viewInsets.bottom),
+            child: SizedBox(
+              height: MediaQuery.of(sheet).size.height * 0.75,
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                    child: TextField(
+                      decoration: InputDecoration(
+                        prefixIcon: const Icon(Icons.search),
+                        hintText: 'Search chambers by name or area',
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(AppConstants.radiusInput),
+                        ),
+                      ),
+                      onChanged: (v) => setSheetState(() => query = v.trim()),
+                    ),
+                  ),
+                  Expanded(
+                    child: shown.isEmpty
+                        ? const Center(
+                            child: Padding(
+                              padding: EdgeInsets.all(24),
+                              child: Text(
+                                'No listed chamber matches. Close this and type a new one.',
+                                textAlign: TextAlign.center,
+                              ),
+                            ),
+                          )
+                        : ListView.builder(
+                            itemCount: shown.length,
+                            itemBuilder: (_, i) {
+                              final o = shown[i];
+                              final details = [o['area']!, o['hours']!].where((s) => s.isNotEmpty).join(' · ');
+                              return ListTile(
+                                leading: const Icon(Icons.local_hospital_outlined),
+                                title: Text(o['name']!),
+                                subtitle: details.isEmpty ? null : Text(details),
+                                onTap: () => Navigator.pop(sheet, o),
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   void _showChamberDialog({int? editIndex}) {
     final isEditing = editIndex != null;
     final Map<String, dynamic>? existing =
         isEditing ? _chambers[editIndex] : null;
 
-    final nameCtrl = TextEditingController(text: existing?['name'] ?? '');
-    final areaCtrl = TextEditingController(text: existing?['area'] ?? '');
+    final nameCtrl = TextEditingController(text: existing?['name']?.toString() ?? '');
+    final areaCtrl = TextEditingController(text: existing?['area']?.toString() ?? '');
+    // No made-up defaults: the doctor types their own hours and fee.
     final hoursCtrl = TextEditingController(
-        text: existing?['visitingHours'] ?? '5:00 PM – 9:00 PM (Sat–Thu)');
+        text: _hoursText(existing?['visitingHours'] ?? existing?['visitingHoursDisplay']));
     final slotCtrl = TextEditingController(
         text: (existing?['slotMinutes']?.toString() ?? '10'));
 
     final feeCtrl =
-        TextEditingController(text: existing?['fee']?.toString() ?? '800');
+        TextEditingController(text: existing?['fee']?.toString() ?? '');
+
+    // Set when the doctor joins a chamber that is already listed.
+    String? pickedChamberId;
+    String? pickedOwnerId;
+    String? formError;
 
     bool isAccessible = existing?['isAccessible'] == true;
     final List<String> selectedFeatures = List<String>.from(
@@ -282,8 +394,37 @@ class _DoctorManagerScreenState extends State<DoctorManagerScreen> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  if (!isEditing) ...[
+                    OutlinedButton.icon(
+                      icon: const Icon(Icons.search, size: 18),
+                      label: Text(pickedChamberId == null
+                          ? 'Pick an existing chamber'
+                          : 'Joining a listed chamber · change'),
+                      onPressed: () async {
+                        final picked = await _pickExistingChamber(context);
+                        if (picked == null) return;
+                        setDialogState(() {
+                          pickedChamberId = picked['id'];
+                          pickedOwnerId = picked['owner'];
+                          nameCtrl.text = picked['name'] ?? '';
+                          areaCtrl.text = picked['area'] ?? '';
+                          if ((picked['hours'] ?? '').isNotEmpty) hoursCtrl.text = picked['hours']!;
+                          formError = null;
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      pickedChamberId == null
+                          ? 'Or type a new chamber below.'
+                          : 'The name comes from the listed chamber.',
+                      style: AppTheme.captionSmall,
+                    ),
+                    const SizedBox(height: 12),
+                  ],
                   TextField(
                     controller: nameCtrl,
+                    readOnly: pickedChamberId != null,
                     decoration: InputDecoration(
                       labelText: 'Hospital / Clinic Name',
                       hintText: 'e.g. Popular Diagnostic / Bup Medical',
@@ -314,6 +455,7 @@ class _DoctorManagerScreenState extends State<DoctorManagerScreen> {
                     controller: hoursCtrl,
                     decoration: InputDecoration(
                       labelText: 'Visiting Hours',
+                      hintText: 'e.g. 5:00 PM – 9:00 PM (Sat–Thu)',
                       fillColor: Colors.white,
                       filled: true,
                       border: OutlineInputBorder(
@@ -343,6 +485,7 @@ class _DoctorManagerScreenState extends State<DoctorManagerScreen> {
                     keyboardType: TextInputType.number,
                     decoration: InputDecoration(
                       labelText: 'Consultation Fee (৳)',
+                      hintText: 'e.g. 800',
                       fillColor: Colors.white,
                       filled: true,
                       border: OutlineInputBorder(
@@ -446,6 +589,10 @@ class _DoctorManagerScreenState extends State<DoctorManagerScreen> {
                       ],
                     ),
                   ),
+                  if (formError != null) ...[
+                    const SizedBox(height: 10),
+                    Text(formError!, style: const TextStyle(color: Colors.red, fontSize: 12.5)),
+                  ],
                 ],
               ),
             ),
@@ -465,11 +612,34 @@ class _DoctorManagerScreenState extends State<DoctorManagerScreen> {
                 onPressed: () async {
                   final name = nameCtrl.text.trim();
                   final area = areaCtrl.text.trim();
-                  if (name.isEmpty) return;
-
                   final rawHours = hoursCtrl.text.trim();
+                  final fee = int.tryParse(feeCtrl.text.trim());
+                  final chId = (existing?['id'] ??
+                          pickedChamberId ??
+                          'chamber-${DateTime.now().millisecondsSinceEpoch}')
+                      .toString();
+
+                  String? error;
+                  if (name.isEmpty) {
+                    error = 'Enter the chamber name.';
+                  } else if (SchedulingService.parseVisitingHours(rawHours) == null) {
+                    error = 'Enter visiting hours like 5:00 PM – 9:00 PM (Sat–Thu).';
+                  } else if (fee == null || fee <= 0) {
+                    error = 'Enter the consultation fee.';
+                  } else if (!isEditing && _chambers.any((c) => c['id'] == chId)) {
+                    error = 'This chamber is already in your list.';
+                  }
+                  if (error != null) {
+                    setDialogState(() => formError = error);
+                    return;
+                  }
+
                   final structuredHours = SchedulingService.structuredVisitingHours(rawHours);
-                  final chId = (existing?['id'] ?? 'chamber-${DateTime.now().millisecondsSinceEpoch}').toString();
+                  // Owner of the chamber doc: this doctor for a new chamber,
+                  // the listed owner when joining one.
+                  final ownerId = (existing?['ownerDoctorId'] ??
+                          (pickedChamberId != null ? pickedOwnerId : _doctorProfileId))
+                      ?.toString();
 
                   final chamberData = {
                     'id': chId,
@@ -478,12 +648,10 @@ class _DoctorManagerScreenState extends State<DoctorManagerScreen> {
                     'hospitalName': name,
                     'area': area.isEmpty ? 'Dhaka' : area,
                     'visitingHours': structuredHours,
-                    'visitingHoursDisplay': rawHours.isNotEmpty ? rawHours : 'Visiting hours not set',
+                    'visitingHoursDisplay': rawHours,
                     'slotMinutes': (int.tryParse(slotCtrl.text.trim()) ?? 10).clamp(5, 15),
-                    'fee': int.tryParse(feeCtrl.text.trim()) ?? 800,
-                    if (_doctorProfileId != null) 'ownerDoctorId': _doctorProfileId,
-                    if (_doctorProfileId != null) 'doctorIds': [_doctorProfileId],
-                    if (_doctorProfileId != null) 'members': {_doctorProfileId!: 'owner'},
+                    'fee': fee,
+                    'ownerDoctorId': ownerId,
                     'aliases': [chId, name],
                     'hasOperator': existing?['hasOperator'] ?? false,
                     'operatorUid': existing?['operatorUid'],
@@ -497,6 +665,9 @@ class _DoctorManagerScreenState extends State<DoctorManagerScreen> {
                     'accessibleToilet': selectedFeatures.contains('Accessible washroom'),
                   };
 
+                  final messenger = ScaffoldMessenger.of(context);
+                  final nav = Navigator.of(ctx);
+
                   setState(() {
                     if (isEditing) {
                       _chambers[editIndex] = chamberData;
@@ -505,56 +676,51 @@ class _DoctorManagerScreenState extends State<DoctorManagerScreen> {
                     }
                   });
 
-                  final messenger = ScaffoldMessenger.of(context);
-                  final nav = Navigator.of(ctx);
-
                   final user = AuthService.currentUser;
                   if (user != null) {
                     final prefs = await SharedPreferences.getInstance();
                     await prefs.setString('doctor_chambers_${user.uid}', jsonEncode(_chambers));
                   }
 
-                  if (_doctorProfileId != null) {
+                  String? syncError;
+                  final docId = _doctorProfileId;
+                  if (docId != null) {
                     try {
-                      final docName = user?.displayName ?? 'Doctor Specialist';
-                      await FirebaseFirestore.instance
-                          .collection('doctors')
-                          .doc(_doctorProfileId)
-                          .set({
-                            'chambers': _chambers,
-                            'name': docName,
-                            'name_lower': docName.toLowerCase(),
-                            'claimedByUid': user?.uid,
-                            'isClaimed': true,
-                            'status': 'active',
-                            'updatedAt': FieldValue.serverTimestamp(),
-                          }, SetOptions(merge: true));
+                      // Public docs never carry who runs the desk.
+                      Map<String, dynamic> public(Map<String, dynamic> c) =>
+                          Map<String, dynamic>.from(c)
+                            ..removeWhere((k, _) => k.startsWith('operator') || k == 'hasOperator');
+                      await FirebaseFirestore.instance.collection('doctors').doc(docId).set({
+                        'chambers': _chambers.map(public).toList(),
+                        'updatedAt': FieldValue.serverTimestamp(),
+                      }, SetOptions(merge: true));
 
-                      final chId = (chamberData['id'] ?? '').toString();
-                      if (chId.isNotEmpty) {
-                        await FirebaseFirestore.instance
-                            .collection('chambers')
-                            .doc(chId)
-                            .set({
-                              ...chamberData,
-                              'ownerDoctorId': _doctorProfileId,
-                              'doctorIds': [_doctorProfileId],
-                              'members': {_doctorProfileId!: 'owner'},
-                              'aliases': [chId, name],
-                              'doctorId': _doctorProfileId,
-                              'doctorName': docName,
-                              'updatedAt': FieldValue.serverTimestamp(),
-                            }, SetOptions(merge: true));
+                      // A listed chamber belongs to its owner; joining only
+                      // links it from this doctor's profile.
+                      if (ownerId == null || ownerId == docId) {
+                        await FirebaseFirestore.instance.collection('chambers').doc(chId).set({
+                          ...public(chamberData),
+                          'ownerDoctorId': docId,
+                          if (!isEditing) 'doctorId': docId,
+                          if (!isEditing) 'doctorName': _doctorName,
+                          'doctorIds': FieldValue.arrayUnion([docId]),
+                          'members': {docId: 'owner'},
+                          'updatedAt': FieldValue.serverTimestamp(),
+                        }, SetOptions(merge: true));
                       }
-                    } catch (_) {}
+                    } catch (e) {
+                      syncError = e.toString();
+                    }
                   }
 
                   nav.pop();
                   messenger.showSnackBar(
                     SnackBar(
-                      content: Text(isEditing
-                          ? '$name chamber details updated.'
-                          : '$name added to your active chambers.'),
+                      content: Text(syncError != null
+                          ? 'Saved on this phone, but sync failed: $syncError'
+                          : isEditing
+                              ? '$name chamber details updated.'
+                              : '$name added to your active chambers.'),
                       behavior: SnackBarBehavior.floating,
                     ),
                   );
@@ -624,29 +790,7 @@ class _DoctorManagerScreenState extends State<DoctorManagerScreen> {
                     ),
                     const SizedBox(height: 12),
 
-                    // Quick option: assign current user
-                    if (currentUser != null)
-                      FilledButton.tonalIcon(
-                        style: FilledButton.styleFrom(
-                          backgroundColor: Theme.of(context).colorScheme.primaryContainer,
-                          foregroundColor: Theme.of(context).colorScheme.primary,
-                        ),
-                        onPressed: () {
-                          setDialogState(() {
-                            selectedUid = currentUser.uid;
-                            nameCtrl.text = currentUser.displayName?.isNotEmpty == true
-                                ? currentUser.displayName!
-                                : (currentUser.email?.split('@').first ?? 'Desk Operator');
-                            emailCtrl.text = currentUser.email ?? '';
-                            selectedUsername = currentUser.email?.split('@').first ?? 'me';
-                          });
-                        },
-                        icon: const Icon(Icons.person_pin, size: 18),
-                        label: Text(
-                          'Assign My Current Account (${currentUser.email?.split('@').first ?? "me"})',
-                          style: const TextStyle(fontSize: 12),
-                        ),
-                      ),
+                    // A doctor runs their own queue without being an operator.
                     const SizedBox(height: 12),
 
                     // Search input
@@ -939,12 +1083,12 @@ class _DoctorManagerScreenState extends State<DoctorManagerScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              (chamber['name'] ?? chamber['hospitalName'] ?? 'Consultation Chamber') as String,
+                              (chamber['name'] ?? chamber['hospitalName'] ?? 'Consultation Chamber').toString(),
                               style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                             ),
                             const SizedBox(height: 2),
                             Text(
-                              (chamber['area'] ?? 'Dhaka') as String,
+                              (chamber['area'] ?? 'Dhaka').toString(),
                               style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
                             ),
                           ],
@@ -972,12 +1116,14 @@ class _DoctorManagerScreenState extends State<DoctorManagerScreen> {
                       Icon(Icons.schedule, size: 16, color: Colors.grey.shade600),
                       const SizedBox(width: 6),
                       Text(
-                        (chamber['visitingHours'] ?? '5:00 PM – 9:00 PM') as String,
+                        _hoursText(chamber['visitingHours'] ?? chamber['visitingHoursDisplay']).isEmpty
+                            ? 'Hours not set'
+                            : _hoursText(chamber['visitingHours'] ?? chamber['visitingHoursDisplay']),
                         style: const TextStyle(fontSize: 12.5),
                       ),
                       const Spacer(),
                       Text(
-                        '৳${chamber['fee'] ?? 800}',
+                        chamber['fee'] == null ? 'Fee not set' : '৳${chamber['fee']}',
                         style: TextStyle(
                           fontSize: 14,
                           fontWeight: FontWeight.bold,

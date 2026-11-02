@@ -20,20 +20,25 @@ import 'settings_screen.dart';
 import 'admin_console_screen.dart';
 import 'chamber_discovery_screen.dart';
 import '../services/firestore_service.dart';
+import '../services/role_switch.dart';
 import '../services/chamber_resolver.dart';
 import '../widgets/health_documents_widget.dart';
 
 class ProfileScreen extends StatefulWidget {
-  final UserRole role;
+  /// The portal to show. Omitted when opened from a top bar: then it is the
+  /// portal the app is currently in, so profile and theme never disagree.
+  final UserRole? _role;
   final ValueChanged<UserRole>? onRoleChanged;
   final ValueChanged<int>? onTabSwitch;
 
+  UserRole get role => _role ?? RoleSwitch.current.value;
+
   const ProfileScreen({
     super.key,
-    this.role = UserRole.patient,
+    UserRole? role,
     this.onRoleChanged,
     this.onTabSwitch,
-  });
+  }) : _role = role;
 
   @override
   State<ProfileScreen> createState() => _ProfileScreenState();

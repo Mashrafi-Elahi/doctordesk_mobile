@@ -25,6 +25,7 @@ import '../widgets/user_avatar.dart';
 import '../widgets/auth_modal.dart';
 import '../widgets/chamber_accessibility.dart';
 import '../widgets/unclaimed_tag.dart';
+import '../services/role_switch.dart';
 import '../widgets/doctor_claim_dialog.dart';
 
 String _reviewErrorMessage(Object error) {
@@ -209,7 +210,7 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
     );
   }
 
-  void _showBookingSheet(Doctor doctor) {
+  Future<void> _showBookingSheet(Doctor doctor) async {
     if (!AuthService.isSignedIn || AuthService.isGuest) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -291,7 +292,7 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
     // Shown inside the sheet: a snackbar would sit hidden behind it.
     String? bookingError;
 
-    showModalBottomSheet<void>(
+    await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
@@ -1138,9 +1139,8 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                 );
               }
 
-              if (!isPatientPortal) {
-                return const SizedBox.shrink();
-              }
+              // Doctors, desk staff and admins can book too: the booking runs
+              // in the patient portal and they return to their own after.
 
               final hasUnlockedChat = _unlockedChatSession != null && _unlockedChatSession!.canSendMessage;
               final isClaimed = doctor.claimedByUid != null && doctor.claimedByUid!.trim().isNotEmpty;
@@ -1149,7 +1149,9 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
               Widget buildBookAppointmentButton({bool isExpanded = false}) {
                 if (isClaimed) {
                   return FilledButton(
-                    onPressed: () => _showBookingSheet(doctor),
+                    onPressed: () => isPatientPortal
+                        ? _showBookingSheet(doctor)
+                        : RoleSwitch.asPatient(() => _showBookingSheet(doctor)),
                     style: FilledButton.styleFrom(
                       minimumSize: Size(isExpanded ? 0 : double.infinity, 50),
                       shape: RoundedRectangleBorder(
