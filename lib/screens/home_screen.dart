@@ -1454,6 +1454,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ],
           ),
+          persist: false,
           action: SnackBarAction(
             label: 'Calendar',
             onPressed: () {
@@ -1481,6 +1482,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ],
           ),
+          persist: false,
           action: SnackBarAction(
             label: 'Calendar',
             onPressed: () {

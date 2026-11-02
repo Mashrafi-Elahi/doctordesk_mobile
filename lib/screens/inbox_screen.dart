@@ -25,6 +25,10 @@ class _InboxScreenState extends State<InboxScreen> {
       await ChatService.hideChatForMe(uid, chatId);
       messenger.showSnackBar(SnackBar(
         content: Text('Chat with $name deleted'),
+        // With an action the snackbar would otherwise stay until dismissed,
+        // following the user across screens.
+        persist: false,
+        duration: const Duration(seconds: 4),
         action: SnackBarAction(label: 'Undo', onPressed: () => ChatService.unhideChatForMe(uid, chatId)),
       ));
     } catch (e) {
